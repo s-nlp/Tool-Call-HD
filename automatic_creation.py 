@@ -1,0 +1,317 @@
+import torch 
+import json
+from vllm import LLM, SamplingParams
+from typing import Literal,Union
+import os
+import json
+from pydantic import BaseModel
+from typing import List,Field
+import random 
+from copy import deepcopy
+from skeleton import Skeletonizer
+"""
+For further examples i will use this tool call that was generated based on the other tool
+We need to provide the model with the following things: 
+user prompt: "I am planning a trip to Japan soon. Could you recommend games popular in Japan to help me understand more about the local culture?"
+
+{  
+   "name": "Japan-themed games for cultural insights",
+   "results": {  
+      "suggestions": [  
+         {  
+            "title": "Windows of Tokyo",
+            "description": "An exploration-style game that showcases the vibrant city life of Tokyo, Japanese culture, and historical sites.",
+            "rating": 4.8
+         },
+         {  
+            "title": "Azur Lane",
+            "description": "A real-time strategic naval battle game that places players in a high-stakes conflict scenario, highlighting the fast-paced nature of Japanese naval warfare.",
+            "rating": 4.5
+         },
+         {  
+            "title": "Cupid’s Control",
+            "description": "A romantic relational adventure game set in 1920s Tokyo, emphasizing the cultural nuances and unique characteristics of the era.",
+            "rating": 4.7
+         },
+         {  
+            "title": "Whisper of the Heart",
+            "description": "An emotional and nostalgic Japanese drama centered around the adventures of a young girl in love with her high school art teacher, which beautifully captures the spirit of Japan's postmodern era.",
+            "rating": 4.9
+         },
+         {  
+            "title": "The Eight",
+            "description": "A psychological horror game set in a remote Japanese village, providing players with a chilling experience that includes Japanese folklore and storytelling techniques.",
+            "rating": 4.6
+         }
+      ]
+   }
+}
+
+This tool_call is provided by the guided_json
+This is the structure that is like the tree 
+Game response is stored in the GameResults that is the tool_call of the GameSuggestion 
+class GameSuggestion(BaseModel):
+    title: str
+    description: str
+    rating: float = Field(..., ge=0, le=5) # this here is for example is a grade from 0 to 5 
+
+class GameResults(BaseModel):
+    suggestions: List[GameSuggestion]
+
+class GameResponse(BaseModel):
+    name: str
+    results: GameResults
+"""
+
+"""
+Comments: 
+First type of hallucination: incorrect factual information
+I started to complete the task and understood that even in the first type of the hallucinations we can have two types of masking:  
+    1. We can do dumb masking : 
+        Example is not needed as it is obvious that we can "mask" the cell in the json object and generate something very obvious of it  being the hallucination
+    2. We can do the "cascading masking" : this is very cool as we can take the "highest" parent as the reference and mask everything(including the parent) making it a very "low perplexity" lie 
+Overgeneration here too
+the idea of this is more simple: I guess that we can either make a comment about the answer (that would be easilty seen) or we can add the comments to the 
+
+
+
+"""
+class HallucinationAuto():
+    def __init__(self):
+        self.skeleton = Skeletonizer()
+
+
+        
+    #------------------------------------------------------
+    # Helping functions
+    #------------------------------------------------------
+
+    # Function generating the guided_json
+    def json_to_guided_schema(self,json_input: str | dict) -> dict:
+        """
+        Takes a raw JSON string (or dict), recursively walks it, collapses arrays, 
+        and outputs a valid JSON Schema ready for vLLM's guided_json.
+        input: raw json (tool responce)
+        output: guided_json
+        """
+        if isinstance(json_input, str):
+            data = json.loads(json_input)
+        else:
+            data = json_input
+        def _infer_type(value):
+
+            if isinstance(value, dict):
+                properties = {}
+                for k, v in value.items():
+                    properties[k] = _infer_type(v)
+                return {
+                    "type": "object",
+                    "properties": properties,
+                    "required": list(value.keys()) 
+                }
+
+            elif isinstance(value, list):
+                if len(value) > 0:
+                    item_schema = _infer_type(value[0])
+                else:
+                    item_schema = {"type": "string"}
+                    raise TypeError('item schema is null')
+                return {
+                    "type": "array",
+                    "items": item_schema
+                }
+                
+            elif isinstance(value, str):
+                return {"type": "string"}
+            elif isinstance(value, bool):
+                return {"type": "boolean"}
+            elif isinstance(value, int):
+                return {"type": "integer"}
+            elif isinstance(value, float):
+                return {"type": "number"}
+            elif value is None:
+                return {"type": "null"}
+            else:
+                return {"type": "string"}
+
+        return _infer_type(data) 
+    # function to show the pretty way of the json for presentaions
+    def print_schema_tree(self, schema: dict, name="root", indent="", defs=None, is_last=True, current_path=""):
+        """Recursively parses any JSON schema and prints a beautiful tree."""
+        if defs is None:
+            defs = schema.get("$defs", {})
+
+        
+        if "$ref" in schema:
+            ref_name = schema["$ref"].split("/")[-1]
+            schema = defs[ref_name]
+
+        marker = "└── " if is_last else "├── "
+        node_type = schema.get("type", "object")
+        
+        # Print the current node with its path
+        path_display = f"  [Path: {current_path}]" if current_path else ""
+        print(f"{indent}{marker}{name} ({node_type}){path_display}")
+        
+        indent += "    " if is_last else "│   "
+        
+        # If it's an Object, go through its properties
+        if node_type == "object" and "properties" in schema:
+            props = schema["properties"]
+            keys = list(props.keys())
+            for i, k in enumerate(keys):
+                next_path = f"{current_path}.{k}" if current_path else k
+                self.print_schema_tree(props[k], k, indent, defs, i == len(keys)-1, next_path)
+                
+        elif node_type == "array" and "items" in schema:
+            next_path = f"{current_path}.items" if current_path else "items"
+            self.print_schema_tree(schema["items"], "items", indent, defs, True, next_path)
+
+    # We have to get the guided_json before the generation and it takes time
+    # maybe we can generate with bathces and do the extraction (of guided_json) before the next generation with vllm
+    def generate_batches(self):
+        pass
+
+    #sampling of the space of the json
+    def get_random_focused_schema(self, guided_json:str):
+        """
+        This will return which field was picked and the modified schema
+        picked, schema_str = get_random_focused_schema(TrendItem)
+        """
+        schema = guided_json.model_json_schema()
+        fields = list(schema['properties'].keys())
+        
+        
+        target_field = random.choice(fields)
+        print(f"Randomly selected focus: {target_field}")
+        for field_name in fields:
+            if field_name != target_field:
+                schema['properties'][field_name] = {"type": "null"}
+                
+        return target_field, json.dumps(schema)
+    
+    # cascade generation 
+    def get_all_leaf_paths(self, schema: dict, current_path: str = "") -> list:
+        """Recursively finds all possible end-point fields in the schema"""
+        paths = []
+        node_type = schema.get("type", "object")
+        
+        if node_type == "object" and "properties" in schema:
+            for key, val in schema["properties"].items():
+                next_path = f"{current_path}.{key}" if current_path else key
+                paths.extend(self.get_all_leaf_paths(val, next_path))
+                
+        elif node_type == "array" and "items" in schema:
+            next_path = f"{current_path}.items" if current_path else "items"
+            paths.extend(self.get_all_leaf_paths(schema["items"], next_path))
+            
+        else:
+            paths.append(current_path)
+            
+        return paths
+    def apply_cascade_mask(self, schema: dict, target_path: str) -> dict:
+        """Recursively sets everything to null EXCEPT the path to the target"""
+        target_parts = target_path.split(".")
+        
+        def _mask_node(node, current_parts):
+            # If we went down the wrong path, shut it down
+            if current_parts != target_parts[:len(current_parts)]:
+                return {"type": "null"}
+                
+            # If we reached the exact target, leave it completely alone!
+            if current_parts == target_parts:
+                return deepcopy(node)
+                
+            # Otherwise, we are on the correct path, keep digging
+            node_copy = deepcopy(node)
+            node_type = node_copy.get("type", "object")
+            
+            if node_type == "object" and "properties" in node_copy:
+                for key, val in node_copy["properties"].items():
+                    node_copy["properties"][key] = _mask_node(val, current_parts + [key])
+                    
+            elif node_type == "array" and "items" in node_copy:
+                node_copy["items"] = _mask_node(node_copy["items"], current_parts + ["items"])
+                
+            return node_copy
+
+        return _mask_node(schema, [])
+    def create_random_cascade_schema(self,schema_dict: dict) -> tuple[str, str]:
+        """
+        MAIN FUNCTION:
+        Takes an inferred schema dict, picks a random target, masks everything else, 
+        and returns the target name and the final guided_json string.
+        output:
+            chosen_target (str),  json.dumps(masked_schema) (str)
+        """
+        #This will find all possible targets
+        all_paths = self.get_all_leaf_paths(schema_dict)
+        
+        #Here we literally pick the random target
+        chosen_target = random.choice(all_paths)
+        
+        # and we get the mask scheme which is needed for generation
+        masked_schema = self.apply_cascade_mask(schema_dict, chosen_target)
+        
+        return chosen_target, json.dumps(masked_schema)
+    #------------------------------------------------------
+    # Generation functions 
+    #------------------------------------------------------
+
+
+    def type1_auto(self,tool_response:str, guided_json:str , model:str , prompt:str ,  how: Literal['random_one' , 'all'] = "random_one", howhow: Literal['smart' , 'dumb'] ='dumb' ,  batch_size: Literal['auto'] | int = 'auto' , max_model_len:int = 1024 , gpu_memory_utiliziation:float = 0.7): 
+        """
+        tool_response: str(dict)
+        guided_json : json.dumps(Nested_class.model_json_schema())
+        model: str 
+        how: random_one, all 
+        batch_size: auto, int 
+
+        Here the error of the type where we try to worsen the input in order to have a mismatch between the input 
+        tool_response and answer of the model 
+
+        output:
+        generated text
+        """
+
+        llm = LLM(
+        model=model,
+        dtype="half",
+        enforce_eager=True,
+        gpu_memory_utilization=gpu_memory_utiliziation, 
+        max_model_len=max_model_len,
+        trust_remote_code=True
+        )
+
+        if guided_json is not None:
+            schema_str = guided_json
+        else:
+            schema_str = self.json_to_guided_schema(tool_response)
+            
+        #generation part
+        if howhow == "smart": 
+            #smart means that we have cascade hallucinations starting from the highest node and containing all the following objects
+            schema_str = self.create_random_cascade_schema(schema_dict=schema_str)[1]
+        elif howhow == 'dumb':
+            schema_str = self.get_random_focused_schema(guided_json=schema_str)[1]
+
+        
+        try:
+            from vllm.sampling_params import GuidedDecodingParams
+            sampling_params = SamplingParams(
+                guided_decoding=GuidedDecodingParams(json=schema_str),
+                temperature=0.8,
+                max_tokens=500
+            )
+        except (ImportError, TypeError):
+
+            try:
+                sampling_params = SamplingParams(
+                    guided_json=schema_str,
+                    temperature=0.8,
+                    max_tokens=500
+                )
+            except TypeError:
+                sampling_params = SamplingParams(temperature=0.8, max_tokens=500)
+        output = llm.generate([prompt] , sampling_params=sampling_params)
+        return output[0].outputs[0].text 
