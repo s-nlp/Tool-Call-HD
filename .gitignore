@@ -1,0 +1,46 @@
+# 🏝️ Python environments.
+venv/
+.venv/
+
+#  linter
+*.pylintrc
+
+# 🐍 python bin cache
+*__pycache__
+*.pytest_cache
+
+# logs
+*.log
+
+# 🖥️ VSCode, Pycharm, etc.
+*.vscode
+*.idea
+*.ipynb_checkpoints
+
+# MacOS
+*.DS_Store
+
+# DataBase
+*.sqlite3
+*.gz
+
+# Django stuff
+media/
+
+# 🤗 cache, 🏝️ Python environment, maybe something else...
+*.cache/
+*cache/
+node_modules/*
+templates_general
+
+# api keys etc..
+.env
+api_keys.conf
+.dev_env
+
+# Test / tooling
+.pytest_cache/
+.coverage
+coverage.xml
+.mypy_cache/
+.hintrc
