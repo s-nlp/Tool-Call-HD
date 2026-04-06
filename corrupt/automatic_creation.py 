@@ -76,65 +76,319 @@ the idea of this is more simple: I guess that we can either make a comment about
 
 
 """
+# class HallucinationAuto():
+#     def __init__(self):
+#         self.skeleton = Skeletonizer()
+
+
+        
+#     #------------------------------------------------------
+#     # Helping functions
+#     #------------------------------------------------------
+
+#     # Function generating the guided_json
+#     def json_to_guided_schema(self,json_input: str | dict) -> dict:
+#         """
+#         Takes a raw JSON string (or dict), recursively walks it, collapses arrays, 
+#         and outputs a valid JSON Schema ready for vLLM's guided_json.
+#         input: raw json (tool responce)
+#         output: guided_json
+#         """
+#         if isinstance(json_input, str):
+#             data = json.loads(json_input)
+#         else:
+#             data = json_input
+#         def _infer_type(value):
+
+#             if isinstance(value, dict):
+#                 properties = {}
+#                 for k, v in value.items():
+#                     properties[k] = _infer_type(v)
+#                 return {
+#                     "type": "object",
+#                     "properties": properties,
+#                     "required": list(value.keys()) 
+#                 }
+
+#             elif isinstance(value, list):
+#                 if len(value) > 0:
+#                     item_schema = _infer_type(value[0])
+#                 else:
+#                     item_schema = {"type": "string"}
+#                     raise TypeError('item schema is null')
+#                 return {
+#                     "type": "array",
+#                     "items": item_schema
+#                 }
+                
+#             elif isinstance(value, str):
+#                 return {"type": "string"}
+#             elif isinstance(value, bool):
+#                 return {"type": "boolean"}
+#             elif isinstance(value, int):
+#                 return {"type": "integer"}
+#             elif isinstance(value, float):
+#                 return {"type": "number"}
+#             elif value is None:
+#                 return {"type": "null"}
+#             else:
+#                 return {"type": "string"}
+
+#         return _infer_type(data) 
+#     # function to show the pretty way of the json for presentaions
+#     def print_schema_tree(self, schema: dict, name="root", indent="", defs=None, is_last=True, current_path=""):
+#         """Recursively parses any JSON schema and prints a beautiful tree."""
+#         if defs is None:
+#             defs = schema.get("$defs", {})
+
+        
+#         if "$ref" in schema:
+#             ref_name = schema["$ref"].split("/")[-1]
+#             schema = defs[ref_name]
+
+#         marker = "└── " if is_last else "├── "
+#         node_type = schema.get("type", "object")
+        
+#         # Print the current node with its path
+#         path_display = f"  [Path: {current_path}]" if current_path else ""
+#         print(f"{indent}{marker}{name} ({node_type}){path_display}")
+        
+#         indent += "    " if is_last else "│   "
+        
+#         # If it's an Object, go through its properties
+#         if node_type == "object" and "properties" in schema:
+#             props = schema["properties"]
+#             keys = list(props.keys())
+#             for i, k in enumerate(keys):
+#                 next_path = f"{current_path}.{k}" if current_path else k
+#                 self.print_schema_tree(props[k], k, indent, defs, i == len(keys)-1, next_path)
+                
+#         elif node_type == "array" and "items" in schema:
+#             next_path = f"{current_path}.items" if current_path else "items"
+#             self.print_schema_tree(schema["items"], "items", indent, defs, True, next_path)
+
+#     # We have to get the guided_json before the generation and it takes time
+#     # maybe we can generate with bathces and do the extraction (of guided_json) before the next generation with vllm
+#     def generate_batches(self):
+#         pass
+
+#     #sampling of the space of the json
+#     def get_random_focused_schema(self, guided_json:str):
+#         """
+#         This will return which field was picked and the modified schema
+#         picked, schema_str = get_random_focused_schema(TrendItem)
+#         """
+#         schema = guided_json.model_json_schema()
+#         fields = list(schema['properties'].keys())
+        
+        
+#         target_field = random.choice(fields)
+#         print(f"Randomly selected focus: {target_field}")
+#         for field_name in fields:
+#             if field_name != target_field:
+#                 schema['properties'][field_name] = {"type": "null"}
+                
+#         return target_field, json.dumps(schema)
+    
+#     # cascade generation 
+#     def get_all_leaf_paths(self, schema: dict, current_path: str = "") -> list:
+#         """Recursively finds all possible end-point fields in the schema"""
+#         paths = []
+#         node_type = schema.get("type", "object")
+        
+#         if node_type == "object" and "properties" in schema:
+#             for key, val in schema["properties"].items():
+#                 next_path = f"{current_path}.{key}" if current_path else key
+#                 paths.extend(self.get_all_leaf_paths(val, next_path))
+                
+#         elif node_type == "array" and "items" in schema:
+#             next_path = f"{current_path}.items" if current_path else "items"
+#             paths.extend(self.get_all_leaf_paths(schema["items"], next_path))
+            
+#         else:
+#             paths.append(current_path)
+            
+#         return paths
+#     def apply_cascade_mask(self, schema: dict, target_path: str) -> dict:
+#         """Recursively sets everything to null EXCEPT the path to the target"""
+#         target_parts = target_path.split(".")
+        
+#         def _mask_node(node, current_parts):
+#             # If we went down the wrong path, shut it down
+#             if current_parts != target_parts[:len(current_parts)]:
+#                 return {"type": "null"}
+                
+#             # If we reached the exact target, leave it completely alone!
+#             if current_parts == target_parts:
+#                 return deepcopy(node)
+                
+#             # Otherwise, we are on the correct path, keep digging
+#             node_copy = deepcopy(node)
+#             node_type = node_copy.get("type", "object")
+            
+#             if node_type == "object" and "properties" in node_copy:
+#                 for key, val in node_copy["properties"].items():
+#                     node_copy["properties"][key] = _mask_node(val, current_parts + [key])
+                    
+#             elif node_type == "array" and "items" in node_copy:
+#                 node_copy["items"] = _mask_node(node_copy["items"], current_parts + ["items"])
+                
+#             return node_copy
+
+#         return _mask_node(schema, [])
+#     def create_random_cascade_schema(self,schema_dict: dict) -> tuple[str, str]:
+#         """
+#         MAIN FUNCTION:
+#         Takes an inferred schema dict, picks a random target, masks everything else, 
+#         and returns the target name and the final guided_json string.
+#         output:
+#             chosen_target (str),  json.dumps(masked_schema) (str)
+#         """
+#         #This will find all possible targets
+#         all_paths = self.get_all_leaf_paths(schema_dict)
+        
+#         #Here we literally pick the random target
+#         chosen_target = random.choice(all_paths)
+        
+#         # and we get the mask scheme which is needed for generation
+#         masked_schema = self.apply_cascade_mask(schema_dict, chosen_target)
+        
+#         return chosen_target, json.dumps(masked_schema)
+#     #------------------------------------------------------
+#     # Generation functions 
+#     #------------------------------------------------------
+
+
+#     def type1_auto(self,tool_response:str, guided_json:str , model:str , prompt:str ,  how: Literal['random_one' , 'all'] = "random_one", howhow: Literal['smart' , 'dumb'] ='dumb' ,  batch_size: Literal['auto'] | int = 'auto' , max_model_len:int = 1024 , gpu_memory_utiliziation:float = 0.7): 
+#         """
+#         tool_response: str(dict)
+#         guided_json : json.dumps(Nested_class.model_json_schema())
+#         model: str 
+#         how: random_one, all 
+#         batch_size: auto, int 
+
+#         Here the error of the type where we try to worsen the input in order to have a mismatch between the input 
+#         tool_response and answer of the model 
+
+#         output:
+#         generated text
+#         """
+
+#         llm = LLM(
+#         model=model,
+#         dtype="half",
+#         enforce_eager=True,
+#         gpu_memory_utilization=gpu_memory_utiliziation, 
+#         max_model_len=max_model_len,
+#         trust_remote_code=True
+#         )
+
+#         if guided_json is not None:
+#             schema_str = guided_json
+#         else:
+#             schema_str = self.json_to_guided_schema(tool_response)
+            
+#         #generation part
+#         if howhow == "smart": 
+#             #smart means that we have cascade hallucinations starting from the highest node and containing all the following objects
+#             schema_str = self.create_random_cascade_schema(schema_dict=schema_str)[1]
+#         elif howhow == 'dumb':
+#             schema_str = self.get_random_focused_schema(guided_json=schema_str)[1]
+
+        
+#         try:
+#             from vllm.sampling_params import GuidedDecodingParams
+#             sampling_params = SamplingParams(
+#                 guided_decoding=GuidedDecodingParams(json=schema_str),
+#                 temperature=0.8,
+#                 max_tokens=500
+#             )
+#         except (ImportError, TypeError):
+
+#             try:
+#                 sampling_params = SamplingParams(
+#                     guided_json=schema_str,
+#                     temperature=0.8,
+#                     max_tokens=500
+#                 )
+#             except TypeError:
+#                 sampling_params = SamplingParams(temperature=0.8, max_tokens=500)
+#         output = llm.generate([prompt] , sampling_params=sampling_params)
+#         return output[0].outputs[0].text 
 class HallucinationAuto():
-    def __init__(self):
-        self.skeleton = Skeletonizer()
-
-
+    def __init__(self, model_name: str = "Qwen/Qwen2.5-3B-Instruct", max_model_len: int = 1024, gpu_memory_utilization: float = 0.7):
+        
+        # self.llm = LLM(
+        #     model=model_name,
+        #     dtype="half",
+        #     enforce_eager=True,
+        #     gpu_memory_utilization=gpu_memory_utilization, 
+        #     max_model_len=max_model_len,
+        #     trust_remote_code=True
+        # )
         
     #------------------------------------------------------
     # Helping functions
     #------------------------------------------------------
-
+        pass
     # Function generating the guided_json
-    def json_to_guided_schema(self,json_input: str | dict) -> dict:
+    def build_dynamic_schema(self,data, is_root=True):
         """
-        Takes a raw JSON string (or dict), recursively walks it, collapses arrays, 
-        and outputs a valid JSON Schema ready for vLLM's guided_json.
-        input: raw json (tool responce)
-        output: guided_json
+        The function to extract the pydantic guided_scheme from the str
         """
-        if isinstance(json_input, str):
-            data = json.loads(json_input)
-        else:
-            data = json_input
-        def _infer_type(value):
-
-            if isinstance(value, dict):
-                properties = {}
-                for k, v in value.items():
-                    properties[k] = _infer_type(v)
-                return {
-                    "type": "object",
-                    "properties": properties,
-                    "required": list(value.keys()) 
-                }
-
-            elif isinstance(value, list):
-                if len(value) > 0:
-                    item_schema = _infer_type(value[0])
+        if isinstance(data, dict):
+            properties = {}
+            for key, value in data.items():
+                #Lock the top-level tool name so it cannot be hallucinated (oppsie daisy))
+                if is_root and key == "name" and isinstance(value, str):
+                    properties[key] = {
+                        "type": "string", 
+                        "enum": [value]  
+                    }
                 else:
-                    item_schema = {"type": "string"}
-                    raise TypeError('item schema is null')
-                return {
-                    "type": "array",
-                    "items": item_schema
-                }
-                
-            elif isinstance(value, str):
-                return {"type": "string"}
-            elif isinstance(value, bool):
-                return {"type": "boolean"}
-            elif isinstance(value, int):
-                return {"type": "integer"}
-            elif isinstance(value, float):
-                return {"type": "number"}
-            elif value is None:
-                return {"type": "null"}
+                    properties[key] = self.build_dynamic_schema(value, is_root=False)
+                    
+            return {
+                "type": "object",
+                "properties": properties,
+                "required": list(data.keys()),
+                "additionalProperties": False # Prevents vLLM from making up new keys
+            }
+            
+        elif isinstance(data, list):
+            if len(data) > 0:
+                item_schema = self.build_dynamic_schema(data[0], is_root=False)
             else:
-                return {"type": "string"}
+                item_schema = {"type": "string"} # Fallback for empty arrays
+                
+            return {
+                "type": "array",
+                "items": item_schema
+            }
+            
+        elif isinstance(data, str):
+            return {"type": "string"}
+        elif isinstance(data, bool):
+            return {"type": "boolean"}
+        elif isinstance(data, int):
+            return {"type": "integer"}
+        elif isinstance(data, float):
+            return {"type": "number"}
+        elif data is None:
+            return {"type": "null"}
+        else:
+            return {"type": "string"}
 
-        return _infer_type(data) 
+    def get_guided_schema_for_tool(self, tool_call_json_str:str) -> json:
+        """
+        Takes a raw JSON string and returns a vLLM-ready schema string.
+        Input: json as a string
+        Ouptut: guided_scheme for pydantic
+        """
+        parsed_json = json.loads(tool_call_json_str)
+        schema_dict = self.build_dynamic_schema(parsed_json, is_root=True)
+        # return json.dumps(schema_dict)
+        return schema_dict
     # function to show the pretty way of the json for presentaions
     def print_schema_tree(self, schema: dict, name="root", indent="", defs=None, is_last=True, current_path=""):
         """Recursively parses any JSON schema and prints a beautiful tree."""
@@ -173,23 +427,22 @@ class HallucinationAuto():
         pass
 
     #sampling of the space of the json
-    def get_random_focused_schema(self, guided_json:str):
+    def get_random_focused_schema(self, schema_dict: dict):
         """
-        This will return which field was picked and the modified schema
-        picked, schema_str = get_random_focused_schema(TrendItem)
+        DUMB MASKING: Picks a single top-level field and nulls the rest.
         """
-        schema = guided_json.model_json_schema()
+        schema = deepcopy(schema_dict)
+        
         fields = list(schema['properties'].keys())
         
-        
         target_field = random.choice(fields)
-        print(f"Randomly selected focus: {target_field}")
+        print(f"Randomly selected Dumb Focus: {target_field}")
+        
         for field_name in fields:
             if field_name != target_field:
                 schema['properties'][field_name] = {"type": "null"}
                 
         return target_field, json.dumps(schema)
-    
     # cascade generation 
     def get_all_leaf_paths(self, schema: dict, current_path: str = "") -> list:
         """Recursively finds all possible end-point fields in the schema"""
@@ -259,59 +512,39 @@ class HallucinationAuto():
     #------------------------------------------------------
 
 
-    def type1_auto(self,tool_response:str, guided_json:str , model:str , prompt:str ,  how: Literal['random_one' , 'all'] = "random_one", howhow: Literal['smart' , 'dumb'] ='dumb' ,  batch_size: Literal['auto'] | int = 'auto' , max_model_len:int = 1024 , gpu_memory_utiliziation:float = 0.7): 
+    def type1_auto(self, tool_response: str, prompt: str, 
+                   guided_schema_dict: Optional[dict] = None, 
+                   how: Literal['random_one', 'all'] = "random_one", 
+                   howhow: Literal['smart', 'dumb'] = 'dumb',  
+                   batch_size: Literal['auto'] | int = 'auto'): 
         """
-        tool_response: str(dict)
-        guided_json : json.dumps(Nested_class.model_json_schema())
-        model: str 
-        how: random_one, all 
-        batch_size: auto, int 
-
-        Here the error of the type where we try to worsen the input in order to have a mismatch between the input 
-        tool_response and answer of the model 
-
-        output:
-        generated text
+        Generates a hallucination based on the tool response.
         """
-
-        llm = LLM(
-        model=model,
-        dtype="half",
-        enforce_eager=True,
-        gpu_memory_utilization=gpu_memory_utiliziation, 
-        max_model_len=max_model_len,
-        trust_remote_code=True
-        )
-
-        if guided_json is not None:
-            schema_str = guided_json
+        if guided_schema_dict is not None:
+            schema_dict = guided_schema_dict
         else:
-            schema_str = self.json_to_guided_schema(tool_response)
+            schema_dict = self.get_guided_schema_for_tool(tool_response)
             
-        #generation part
-        if howhow == "smart": 
-            #smart means that we have cascade hallucinations starting from the highest node and containing all the following objects
-            schema_str = self.create_random_cascade_schema(schema_dict=schema_str)[1]
-        elif howhow == 'dumb':
-            schema_str = self.get_random_focused_schema(guided_json=schema_str)[1]
-
         
+        if howhow == "smart": 
+            # Smart: Cascade hallucinations (Tree logic)
+            target, final_json_str = self.create_random_cascade_schema(schema_dict)
+        elif howhow == 'dumb':
+            # Dumb: Single cell hallucination
+            target, final_json_str = self.get_random_focused_schema(schema_dict)
+
         try:
             from vllm.sampling_params import GuidedDecodingParams
             sampling_params = SamplingParams(
-                guided_decoding=GuidedDecodingParams(json=schema_str),
+                guided_decoding=GuidedDecodingParams(json=final_json_str),
                 temperature=0.8,
                 max_tokens=500
             )
         except (ImportError, TypeError):
-
             try:
-                sampling_params = SamplingParams(
-                    guided_json=schema_str,
-                    temperature=0.8,
-                    max_tokens=500
-                )
+                sampling_params = SamplingParams(guided_json=final_json_str, temperature=0.8, max_tokens=500)
             except TypeError:
                 sampling_params = SamplingParams(temperature=0.8, max_tokens=500)
-        output = llm.generate([prompt] , sampling_params=sampling_params)
-        return output[0].outputs[0].text 
+                
+        output = self.llm.generate([prompt], sampling_params=sampling_params)
+        return output[0].outputs[0].text
