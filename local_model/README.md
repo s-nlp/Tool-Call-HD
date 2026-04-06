@@ -1,3 +1,11 @@
+# Startup
+Перед стартом создать ключи в файле `api_keys.conf`, пример:
+```bash
+"Bearer sk-first-dsadasd" 1;
+"Bearer sk-second-asdas" 1;
+```
+
+
 # команды Make
 ```bash
 make up

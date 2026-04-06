@@ -1,147 +1,97 @@
-# ── Qwen3.5-9B · vLLM deployment
-# Usage: make <target>
-#
-# Required tools: docker, docker compose, openssl, curl
-
-COMPOSE         := docker-compose
-CONTAINER_VLLM  := qwen35-vllm
-CONTAINER_NGINX := qwen35-proxy
-API_URL         := http://localhost:8080
-API_KEYS_FILE   := api_keys.conf
+COMPOSE := docker-compose
+API_URL := http://localhost:8088
+KEYS    := api_keys.conf
+MODEL   := qwen2.5-14b-instruct
 
 .DEFAULT_GOAL := help
 
-# ── Colours 
-BOLD  := \033[1m
-RESET := \033[0m
-GREEN := \033[32m
-CYAN  := \033[36m
-YELLOW := \033[33m
-
 .PHONY: help
-help: ## Show this help message
+help:
+	@echo "Qwen2.5-14B-Instruct vLLM Server (CUDA 12.1 custom image)"
 	@echo ""
-	@echo "  $(BOLD)Qwen3.5-9B · vLLM Server$(RESET)"
-	@echo ""
-	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ \
-		{ printf "  $(CYAN)%-18s$(RESET) %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
-	@echo ""
+	@echo "  build           Build the custom CUDA 12.1 image"
+	@echo "  up              Start all services"
+	@echo "  down            Stop all services"
+	@echo "  logs            Tail all logs"
+	@echo "  logs-vllm       Tail vLLM logs only"
+	@echo "  logs-nginx      Tail nginx logs only"
+	@echo "  status          Containers + GPU usage"
+	@echo "  health          Check API health"
+	@echo "  add-key USER=x  Add API key for user"
+	@echo "  list-keys       List all API keys"
+	@echo "  remove-key USER=x  Remove user's key"
+	@echo "  test API_KEY=x  Send a test prompt"
+	@echo "  clean           Stop + remove local images"
 
-# ── Build & run 
 .PHONY: build
-build: ## Build the Docker image (no cache)
+build:
 	$(COMPOSE) build --no-cache
 
 .PHONY: up
-up: ## Start all services (build if needed)
-	$(COMPOSE) up -d --build
-	@echo ""
-	@echo "  $(GREEN)✓ Services started.$(RESET)"
-	@echo "  API will be ready at $(API_URL)/v1 once the model loads (~2–5 min)."
-	@echo "  Run $(CYAN)make logs-vllm$(RESET) to watch progress."
+up:
+	$(COMPOSE) up -d
+	@echo "Services started. Watch progress: make logs-vllm"
 
 .PHONY: down
-down: ## Stop and remove containers (keeps volumes)
+	down:
 	$(COMPOSE) down
 
-.PHONY: restart
-restart: ## Restart all services
-	$(COMPOSE) restart
-
-.PHONY: restart-nginx
-restart-nginx: ## Reload Nginx only (e.g. after editing api_keys.conf)
-	$(COMPOSE) restart $(CONTAINER_NGINX)
-	@echo "  $(GREEN)✓ Nginx reloaded.$(RESET)"
-
-# ── Logs ───
 .PHONY: logs
-logs: ## Tail logs from all services
+logs:
 	$(COMPOSE) logs -f
 
 .PHONY: logs-vllm
-logs-vllm: ## Tail vLLM logs (model loading progress)
-	$(COMPOSE) logs -f $(CONTAINER_VLLM)
+logs-vllm:
+	$(COMPOSE) logs -f qwen25-vllm
 
 .PHONY: logs-nginx
-logs-nginx: ## Tail Nginx access / error logs
-	$(COMPOSE) logs -f $(CONTAINER_NGINX)
+logs-nginx:
+	$(COMPOSE) logs -f qwen25-proxy
 
-# ── Status ─
 .PHONY: status
-status: ## Show running containers and GPU usage
-	@echo "$(BOLD)── Containers ─────────────────────────────────────$(RESET)"
+status:
 	@$(COMPOSE) ps
 	@echo ""
-	@echo "$(BOLD)── GPU Usage ───────────────────────────────────────$(RESET)"
-	@nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu,temperature.gpu \
+	@nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu \
 		--format=csv,noheader,nounits \
-		| awk -F', ' '{printf "  GPU %s %-22s  MEM %5s/%5s MiB  UTIL %3s%%  TEMP %s°C\n", \
-			$$1, $$2, $$3, $$4, $$5, $$6}'
+		| awk -F', ' '{printf "GPU %s  %-22s  %5s/%5s MiB  %s%% util\n",$$1,$$2,$$3,$$4,$$5}'
 
 .PHONY: health
-health: ## Check API health endpoint
-	@curl -sf $(API_URL)/health \
-		&& echo "  $(GREEN)✓ API is healthy$(RESET)" \
-		|| echo "  $(YELLOW)✗ API not yet ready (model may still be loading)$(RESET)"
+health:
+	@curl -sf $(API_URL)/health && echo "API is healthy" || echo "API not ready yet"
 
-# ── API key management ────────────────────────────────────────────────────────
 .PHONY: add-key
-add-key: ## Add a new API key  →  make add-key USER=alice
+add-key:
 ifndef USER
-	$(error Usage: make add-key USER=<username>)
+	$(error Usage: make add-key USER=alice)
 endif
 	@KEY=$$(openssl rand -hex 32); \
-	echo '"Bearer sk-$(USER)-'"$$KEY"'"   1;' >> $(API_KEYS_FILE); \
-	echo ""; \
-	echo "  $(GREEN)✓ Key added for $(USER)$(RESET)"; \
-	echo ""; \
-	echo "  Share this with $(USER):"; \
-	echo "  $(BOLD)  API URL : $(API_URL)/v1$(RESET)"; \
-	echo "  $(BOLD)  API Key : sk-$(USER)-$$KEY$(RESET)"; \
-	echo ""; \
-	echo "  Run $(CYAN)make restart-nginx$(RESET) to apply."
+	echo '"Bearer sk-$(USER)-'"$$KEY"'"   1;' >> $(KEYS); \
+	echo "Key for $(USER): sk-$(USER)-$$KEY"; \
+	echo "Reload nginx: $(COMPOSE) restart qwen25-proxy"
 
 .PHONY: list-keys
-list-keys: ## List all users in api_keys.conf
-	@echo "$(BOLD)── API Keys ($(API_KEYS_FILE)) ──────────────────────$(RESET)"
-	@grep -o 'sk-[^"]*' $(API_KEYS_FILE) | awk '{print "  " $$0}' \
-		|| echo "  (no keys found)"
+list-keys:
+	@grep -o 'sk-[^"]*' $(KEYS) || echo "(no keys)"
 
 .PHONY: remove-key
-remove-key: ## Remove a user's key  →  make remove-key USER=alice
+remove-key:
 ifndef USER
-	$(error Usage: make remove-key USER=<username>)
+	$(error Usage: make remove-key USER=alice)
 endif
-	@if grep -q 'sk-$(USER)-' $(API_KEYS_FILE); then \
-		sed -i '/sk-$(USER)-/d' $(API_KEYS_FILE); \
-		echo "  $(GREEN)✓ Key for $(USER) removed.$(RESET)"; \
-		echo "  Run $(CYAN)make restart-nginx$(RESET) to apply."; \
-	else \
-		echo "  $(YELLOW)No key found for user: $(USER)$(RESET)"; \
-	fi
+	@sed -i '/sk-$(USER)-/d' $(KEYS) && echo "Removed $(USER). Reload: $(COMPOSE) restart qwen25-proxy"
 
-# ── Quick test ─
 .PHONY: test
-test: ## Send a test prompt (requires API_KEY=<key>)
+test:
 ifndef API_KEY
-	$(error Usage: make test API_KEY=<your-key>)
+	$(error Usage: make test API_KEY=sk-...)
 endif
 	@curl -s $(API_URL)/v1/chat/completions \
 		-H "Content-Type: application/json" \
 		-H "Authorization: Bearer $(API_KEY)" \
-		-d '{"model":"qwen3.5-9b","messages":[{"role":"user","content":"Reply with one sentence only: what are you?"}],"max_tokens":128,"extra_body":{"chat_template_kwargs":{"enable_thinking":false}}}' \
-		| python3 -c "import sys,json; d=json.load(sys.stdin); print('\n  ' + d['choices'][0]['message']['content'].strip() + '\n')" \
-		2>/dev/null || echo "  $(YELLOW)Could not parse response — is the API ready?$(RESET)"
+		-d '{"model":"$(MODEL)","messages":[{"role":"user","content":"What are you?"}],"max_tokens":64}' \
+		| python3 -c "import sys,json; print(json.load(sys.stdin)['choices'][0]['message']['content'].strip())"
 
-# ── Cleanup 
 .PHONY: clean
-clean: ## Stop containers and remove images
+clean:
 	$(COMPOSE) down --rmi local
-
-.PHONY: clean-all
-clean-all: ## Stop containers, remove images AND the model cache volume
-	@echo "$(YELLOW)This will delete the downloaded model (~18 GB). Continue? [y/N]$(RESET)" && \
-		read ans && [ "$$ans" = "y" ] && \
-		$(COMPOSE) down --rmi local -v && \
-		echo "  $(GREEN)✓ Everything removed.$(RESET)" || \
-		echo "  Aborted."
