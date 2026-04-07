@@ -76,6 +76,10 @@ the idea of this is more simple: I guess that we can either make a comment about
 
 
 """
+import math
+from pathlib import Path
+from tqdm.auto import tqdm
+
 class HallucinationAuto():
     # Field names that look numeric but should stay as strings
     _KEEP_AS_STRING_KEYS = {"id", "zip", "zip_code", "postal_code", "postal", "code", 
@@ -328,9 +332,11 @@ class HallucinationAuto():
         schema = deepcopy(locked_schema)
 
         if group:
+            # ── ARRAY CASE: unlock entire array element ──
             self._apply_at_path(schema, group.split("."), self._free_all)
             unlocked_paths = [p for p in all_paths if p.startswith(group + ".") or p == group]
         else:
+            # ── FLAT CASE: unlock sibling group ──
             parent_path, siblings = self._get_siblings(locked_schema, chosen)
             _, chosen_key = self._find_parent_path(chosen)
 
@@ -425,3 +431,79 @@ class HallucinationAuto():
 
         hallucinated = json.loads(resp.choices[0].message.content)
         return hallucinated, target, unlocked_paths
+
+    #------------------------------------------------------
+    # Full dataset generation
+    #------------------------------------------------------
+
+    def generate_type1_dataset(
+        self,
+        client,
+        model: str,
+        dataset: list[dict],
+        output_path: str,
+        howhow: Literal['smart', 'dumb'] = 'smart',
+        temperature: float = 0.8,
+        max_tokens: int = 4096,
+        max_retries: int = 3,
+    ) -> list[dict]:
+        """Generate Type 1 hallucinated tool responses for the entire dataset.
+        
+        Saves to output_path after EACH successful row (real-time append).
+        If the file already exists with partial results, resumes from where it left off.
+        
+        Returns the full list of generated rows.
+        """
+        out = Path(output_path)
+        
+        # Resume from existing partial results
+        if out.exists():
+            with open(out, "r") as f:
+                generated = json.load(f)
+            start_idx = len(generated)
+        else:
+            generated = []
+            start_idx = 0
+        
+        skipped = 0
+        pbar = tqdm(range(start_idx, len(dataset)), initial=start_idx, total=len(dataset), desc="Generating")
+        for idx in pbar:
+            row = dataset[idx]
+            
+            for attempt in range(max_retries):
+                try:
+                    hall_dict, target, unlocked_paths = self.type1_api(
+                        client=client,
+                        model=model,
+                        tool_response=row["tool_response"],
+                        user_prompt=row["user_prompt"],
+                        howhow=howhow,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    )
+                    break
+                except (json.JSONDecodeError, Exception) as e:
+                    hall_dict = None
+            
+            if hall_dict is None:
+                skipped += 1
+                pbar.set_postfix(done=len(generated), skipped=skipped)
+                continue
+            
+            new_row = {
+                **row,
+                "hallucinated_tool_response": json.dumps(hall_dict, ensure_ascii=False),
+                "hallucination_target": target,
+                "unlocked_paths": unlocked_paths,
+                "hallucination_type": f"type1_{howhow}",
+            }
+            generated.append(new_row)
+            
+            # Save after each row
+            with open(out, "w") as f:
+                json.dump(generated, f, ensure_ascii=False, indent=2)
+            
+            pbar.set_postfix(done=len(generated), skipped=skipped)
+        
+        print(f"Done: {len(generated)} rows saved to {output_path}, {skipped} skipped")
+        return generated
