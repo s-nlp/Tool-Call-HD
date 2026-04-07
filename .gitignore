@@ -30,6 +30,7 @@ media/
 # 🤗 cache, 🏝️ Python environment, maybe something else...
 *.cache/
 *cache/
+*data/
 node_modules/*
 templates_general
 
