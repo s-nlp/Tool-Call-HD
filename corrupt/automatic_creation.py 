@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from typing import List,Field
 import random 
 from copy import deepcopy
-from skeleton import Skeletonizer
+import math
 """
 For further examples i will use this tool call that was generated based on the other tool
 We need to provide the model with the following things: 
@@ -76,242 +76,548 @@ the idea of this is more simple: I guess that we can either make a comment about
 
 
 """
+import math
+from pathlib import Path
+from tqdm.auto import tqdm
+
+import math
+from pathlib import Path
+from tqdm.auto import tqdm
+
 class HallucinationAuto():
-    def __init__(self):
-        self.skeleton = Skeletonizer()
+    # Field names that look numeric but should stay as strings
+    _KEEP_AS_STRING_KEYS = {"id", "zip", "zip_code", "postal_code", "postal", "code", 
+                            "phone", "phone_number", "fax", "ssn", "isbn", "ean", "upc"}
 
+    def __init__(self, model_name: str = "Qwen/Qwen2.5-3B-Instruct", max_model_len: int = 1024, gpu_memory_utilization: float = 0.7):
+        pass
 
-        
     #------------------------------------------------------
-    # Helping functions
+    # Schema builders
     #------------------------------------------------------
 
-    # Function generating the guided_json
-    def json_to_guided_schema(self,json_input: str | dict) -> dict:
-        """
-        Takes a raw JSON string (or dict), recursively walks it, collapses arrays, 
-        and outputs a valid JSON Schema ready for vLLM's guided_json.
-        input: raw json (tool responce)
-        output: guided_json
-        """
-        if isinstance(json_input, str):
-            data = json.loads(json_input)
-        else:
-            data = json_input
-        def _infer_type(value):
-
-            if isinstance(value, dict):
-                properties = {}
-                for k, v in value.items():
-                    properties[k] = _infer_type(v)
-                return {
-                    "type": "object",
-                    "properties": properties,
-                    "required": list(value.keys()) 
-                }
-
-            elif isinstance(value, list):
-                if len(value) > 0:
-                    item_schema = _infer_type(value[0])
-                else:
-                    item_schema = {"type": "string"}
-                    raise TypeError('item schema is null')
-                return {
-                    "type": "array",
-                    "items": item_schema
-                }
-                
-            elif isinstance(value, str):
-                return {"type": "string"}
-            elif isinstance(value, bool):
-                return {"type": "boolean"}
-            elif isinstance(value, int):
-                return {"type": "integer"}
-            elif isinstance(value, float):
-                return {"type": "number"}
-            elif value is None:
-                return {"type": "null"}
+    def build_locked_schema(self, data, is_root=True, field_name: str = ""):
+        """Build a LOCKED schema using prefixItems for arrays.
+        Each array element gets its own locked schema (no cross-contamination).
+        Every leaf value is pinned via enum.
+        Strings stay strings — NO numeric conversion (prevents type leaks)."""
+        if isinstance(data, dict):
+            properties = {}
+            for key, value in data.items():
+                properties[key] = self.build_locked_schema(value, is_root=False, field_name=key)
+            return {
+                "type": "object",
+                "properties": properties,
+                "required": list(data.keys()),
+                "additionalProperties": False
+            }
+        elif isinstance(data, list):
+            if len(data) > 0:
+                prefix_items = [self.build_locked_schema(item, is_root=False, field_name=field_name) for item in data]
             else:
-                return {"type": "string"}
+                prefix_items = []
+            return {
+                "type": "array",
+                "prefixItems": prefix_items,
+                "minItems": len(data),
+                "maxItems": len(data)
+            }
+        # LEAVES — preserve exact original type, no conversion
+        elif isinstance(data, bool):
+            return {"type": "boolean", "enum": [data]}
+        elif isinstance(data, int):
+            return {"type": "integer", "enum": [data]}
+        elif isinstance(data, float):
+            return {"type": "number", "enum": [data]}
+        elif isinstance(data, str):
+            return {"type": "string", "enum": [data]}
+        elif data is None:
+            return {"type": "null"}
+        else:
+            return {"type": "string", "enum": [str(data)]}
 
-        return _infer_type(data) 
-    # function to show the pretty way of the json for presentaions
+    def get_locked_schema_for_tool(self, tool_call_json_str: str) -> dict:
+        parsed_json = json.loads(tool_call_json_str)
+        return self.build_locked_schema(parsed_json, is_root=True)
+
+    #------------------------------------------------------
+    # Tree inspection
+    #------------------------------------------------------
+
     def print_schema_tree(self, schema: dict, name="root", indent="", defs=None, is_last=True, current_path=""):
-        """Recursively parses any JSON schema and prints a beautiful tree."""
         if defs is None:
             defs = schema.get("$defs", {})
-
-        
         if "$ref" in schema:
             ref_name = schema["$ref"].split("/")[-1]
             schema = defs[ref_name]
-
         marker = "└── " if is_last else "├── "
         node_type = schema.get("type", "object")
-        
-        # Print the current node with its path
+        locked = " [LOCKED]" if "enum" in schema else ""
         path_display = f"  [Path: {current_path}]" if current_path else ""
-        print(f"{indent}{marker}{name} ({node_type}){path_display}")
-        
+        print(f"{indent}{marker}{name} ({node_type}){locked}{path_display}")
         indent += "    " if is_last else "│   "
-        
-        # If it's an Object, go through its properties
         if node_type == "object" and "properties" in schema:
             props = schema["properties"]
             keys = list(props.keys())
             for i, k in enumerate(keys):
                 next_path = f"{current_path}.{k}" if current_path else k
                 self.print_schema_tree(props[k], k, indent, defs, i == len(keys)-1, next_path)
-                
+        elif node_type == "array" and "prefixItems" in schema:
+            for i, item_schema in enumerate(schema["prefixItems"]):
+                next_path = f"{current_path}.{i}" if current_path else str(i)
+                self.print_schema_tree(item_schema, f"[{i}]", indent, defs, i == len(schema["prefixItems"])-1, next_path)
         elif node_type == "array" and "items" in schema:
             next_path = f"{current_path}.items" if current_path else "items"
             self.print_schema_tree(schema["items"], "items", indent, defs, True, next_path)
 
-    # We have to get the guided_json before the generation and it takes time
-    # maybe we can generate with bathces and do the extraction (of guided_json) before the next generation with vllm
-    def generate_batches(self):
-        pass
-
-    #sampling of the space of the json
-    def get_random_focused_schema(self, guided_json:str):
-        """
-        This will return which field was picked and the modified schema
-        picked, schema_str = get_random_focused_schema(TrendItem)
-        """
-        schema = guided_json.model_json_schema()
-        fields = list(schema['properties'].keys())
-        
-        
-        target_field = random.choice(fields)
-        print(f"Randomly selected focus: {target_field}")
-        for field_name in fields:
-            if field_name != target_field:
-                schema['properties'][field_name] = {"type": "null"}
-                
-        return target_field, json.dumps(schema)
-    
-    # cascade generation 
     def get_all_leaf_paths(self, schema: dict, current_path: str = "") -> list:
-        """Recursively finds all possible end-point fields in the schema"""
+        """Find all leaf paths with numeric array indices."""
         paths = []
         node_type = schema.get("type", "object")
-        
         if node_type == "object" and "properties" in schema:
             for key, val in schema["properties"].items():
                 next_path = f"{current_path}.{key}" if current_path else key
                 paths.extend(self.get_all_leaf_paths(val, next_path))
-                
+        elif node_type == "array" and "prefixItems" in schema:
+            for i, item_schema in enumerate(schema["prefixItems"]):
+                next_path = f"{current_path}.{i}" if current_path else str(i)
+                paths.extend(self.get_all_leaf_paths(item_schema, next_path))
         elif node_type == "array" and "items" in schema:
             next_path = f"{current_path}.items" if current_path else "items"
             paths.extend(self.get_all_leaf_paths(schema["items"], next_path))
-            
         else:
             paths.append(current_path)
-            
         return paths
-    def apply_cascade_mask(self, schema: dict, target_path: str) -> dict:
-        """Recursively sets everything to null EXCEPT the path to the target"""
-        target_parts = target_path.split(".")
-        
-        def _mask_node(node, current_parts):
-            # If we went down the wrong path, shut it down
-            if current_parts != target_parts[:len(current_parts)]:
-                return {"type": "null"}
-                
-            # If we reached the exact target, leave it completely alone!
-            if current_parts == target_parts:
-                return deepcopy(node)
-                
-            # Otherwise, we are on the correct path, keep digging
-            node_copy = deepcopy(node)
-            node_type = node_copy.get("type", "object")
-            
-            if node_type == "object" and "properties" in node_copy:
-                for key, val in node_copy["properties"].items():
-                    node_copy["properties"][key] = _mask_node(val, current_parts + [key])
-                    
-            elif node_type == "array" and "items" in node_copy:
-                node_copy["items"] = _mask_node(node_copy["items"], current_parts + ["items"])
-                
-            return node_copy
 
-        return _mask_node(schema, [])
-    def create_random_cascade_schema(self,schema_dict: dict) -> tuple[str, str]:
+    def get_all_internal_paths(self, schema: dict, current_path: str = "") -> list:
+        """Find all non-leaf, non-root node paths (objects, arrays, array elements).
+        Used by DUMB masking to pick a subtree to unlock."""
+        paths = []
+        node_type = schema.get("type", "object")
+        if node_type == "object" and "properties" in schema:
+            if current_path:  # skip root
+                paths.append(current_path)
+            for key, val in schema["properties"].items():
+                next_path = f"{current_path}.{key}" if current_path else key
+                paths.extend(self.get_all_internal_paths(val, next_path))
+        elif node_type == "array" and "prefixItems" in schema:
+            if current_path:
+                paths.append(current_path)
+            for i, item_schema in enumerate(schema["prefixItems"]):
+                next_path = f"{current_path}.{i}" if current_path else str(i)
+                paths.extend(self.get_all_internal_paths(item_schema, next_path))
+        elif node_type == "array" and "items" in schema:
+            if current_path:
+                paths.append(current_path)
+        return paths
+
+    #------------------------------------------------------
+    # Group / sibling detection
+    #------------------------------------------------------
+
+    def find_group(self, schema: dict, leaf_path: str) -> str | None:
+        """Find the innermost array-element group path for a leaf.
+        Returns None if the leaf is not inside any array."""
+        parts = leaf_path.split(".")
+        node, so_far, group = schema, [], None
+        for part in parts:
+            if node.get("type") == "array" and "prefixItems" in node:
+                so_far.append(part)
+                group = ".".join(so_far)
+                node = node["prefixItems"][int(part)]
+            elif node.get("type") == "object" and part in node.get("properties", {}):
+                so_far.append(part)
+                node = node["properties"][part]
+            else:
+                break
+        return group
+
+    @staticmethod
+    def _get_node_at_path(schema, path_parts):
+        """Navigate schema and return the node at the given path."""
+        node = schema
+        for part in path_parts:
+            if node.get("type") == "array" and "prefixItems" in node:
+                node = node["prefixItems"][int(part)]
+            elif node.get("type") == "object" and part in node.get("properties", {}):
+                node = node["properties"][part]
+            else:
+                break
+        return node
+
+    @staticmethod
+    def _find_parent_path(leaf_path):
+        """Return (parent_path, leaf_key). E.g. 'results.city' → ('results', 'city')"""
+        parts = leaf_path.split(".")
+        if len(parts) == 1:
+            return "", parts[0]
+        return ".".join(parts[:-1]), parts[-1]
+
+    def _get_siblings(self, schema, leaf_path):
+        """Get sibling leaf keys under the same parent object.
+        Skips root-level 'name' (always locked)."""
+        parent_path, leaf_key = self._find_parent_path(leaf_path)
+        if not parent_path:
+            parent_node = schema
+        else:
+            parent_node = self._get_node_at_path(schema, parent_path.split("."))
+        if parent_node.get("type") != "object" or "properties" not in parent_node:
+            return parent_path, [leaf_key]
+        all_keys = list(parent_node["properties"].keys())
+        if not parent_path:
+            siblings = [k for k in all_keys if k != "name"]
+        else:
+            siblings = all_keys
+        return parent_path, siblings
+
+    #------------------------------------------------------
+    # Unlock operations
+    #------------------------------------------------------
+
+    @staticmethod
+    def _free_all(node):
+        """Recursively strip all enum/minItems/maxItems constraints from a subtree.
+        Types are preserved exactly as in the locked schema."""
+        n = deepcopy(node)
+        t = n.get("type", "")
+        if t == "object" and "properties" in n:
+            n["properties"] = {k: HallucinationAuto._free_all(v) for k, v in n["properties"].items()}
+        elif t == "array":
+            if "prefixItems" in n:
+                n["prefixItems"] = [HallucinationAuto._free_all(s) for s in n["prefixItems"]]
+            if "items" in n:
+                n["items"] = HallucinationAuto._free_all(n["items"])
+            n.pop("minItems", None)
+            n.pop("maxItems", None)
+        else:
+            n.pop("enum", None)
+        return n
+
+    @staticmethod
+    def _apply_at_path(schema, path_parts, fn):
+        """Navigate schema tree along path_parts and apply fn at the target node.
+        Mutates schema in-place — caller should deepcopy first."""
+        if not path_parts:
+            return fn(schema)
+        key = path_parts[0]
+        rest = path_parts[1:]
+        if schema.get("type") == "array" and "prefixItems" in schema:
+            idx = int(key)
+            schema["prefixItems"][idx] = HallucinationAuto._apply_at_path(schema["prefixItems"][idx], rest, fn)
+        elif schema.get("type") == "object" and key in schema.get("properties", {}):
+            schema["properties"][key] = HallucinationAuto._apply_at_path(schema["properties"][key], rest, fn)
+        return schema
+
+    #------------------------------------------------------
+    # Masking strategies
+    #------------------------------------------------------
+
+    def create_cascade_schema(self, locked_schema: dict) -> tuple:
+        """CASCADE v3: Group-aware masking for both arrays and flat structures.
+        
+        1. Pick a random leaf (depth-weighted, skip root 'name')
+        2. ARRAY CASE: leaf inside array → unlock entire array element
+        3. FLAT CASE:  leaf NOT in array → find parent sibling keys:
+           - ≤ 3 siblings: unlock ALL
+           - > 3 siblings: unlock 2..⌈N/2⌉ random siblings (including chosen)
+        
+        Returns: (chosen_leaf, unlocked_paths_list, schema_dict)
+          - unlocked_paths_list: list of full dot-paths that were unlocked
         """
-        MAIN FUNCTION:
-        Takes an inferred schema dict, picks a random target, masks everything else, 
-        and returns the target name and the final guided_json string.
-        output:
-            chosen_target (str),  json.dumps(masked_schema) (str)
-        """
-        #This will find all possible targets
-        all_paths = self.get_all_leaf_paths(schema_dict)
-        
-        #Here we literally pick the random target
-        chosen_target = random.choice(all_paths)
-        
-        # and we get the mask scheme which is needed for generation
-        masked_schema = self.apply_cascade_mask(schema_dict, chosen_target)
-        
-        return chosen_target, json.dumps(masked_schema)
+        all_paths = self.get_all_leaf_paths(locked_schema)
+        candidates = [p for p in all_paths if p != "name"] or all_paths
+        if not candidates:
+            raise ValueError("No hallucinatable leaf paths found")
+
+        weights = [p.count(".") + 1 for p in candidates]
+        chosen = random.choices(candidates, weights=weights, k=1)[0]
+
+        group = self.find_group(locked_schema, chosen)
+        schema = deepcopy(locked_schema)
+
+        if group:
+            # ── ARRAY CASE: unlock entire array element ──
+            self._apply_at_path(schema, group.split("."), self._free_all)
+            unlocked_paths = [p for p in all_paths if p.startswith(group + ".") or p == group]
+        else:
+            # ── FLAT CASE: unlock sibling group ──
+            parent_path, siblings = self._get_siblings(locked_schema, chosen)
+            _, chosen_key = self._find_parent_path(chosen)
+
+            if len(siblings) <= 3:
+                keys_to_unlock = siblings
+            else:
+                max_unlock = max(2, math.ceil(len(siblings) / 2))
+                n_unlock = random.randint(2, max_unlock)
+                other_siblings = [k for k in siblings if k != chosen_key]
+                n_extras = min(n_unlock - 1, len(other_siblings))
+                extras = random.sample(other_siblings, n_extras)
+                keys_to_unlock = [chosen_key] + extras
+
+            unlocked_paths = []
+            for key in keys_to_unlock:
+                full_path = f"{parent_path}.{key}" if parent_path else key
+                self._apply_at_path(schema, full_path.split("."), self._free_all)
+                unlocked_paths.append(full_path)
+
+        return chosen, unlocked_paths, schema
+
+    def get_random_focused_schema(self, locked_schema: dict):
+        """DUMB MASKING: Pick a random internal subtree node (depth-weighted),
+        unlock everything under it."""
+        internal = self.get_all_internal_paths(locked_schema)
+        candidates = [p for p in internal if p != "name"] or internal
+        if not candidates:
+            fields = list(locked_schema['properties'].keys())
+            candidates = [f for f in fields if "enum" not in locked_schema['properties'][f]] or fields
+            target = random.choice(candidates)
+            s = deepcopy(locked_schema)
+            if target in s.get("properties", {}):
+                s["properties"][target] = self._free_all(s["properties"][target])
+            return target, s
+
+        weights = [p.count(".") + 1 for p in candidates]
+        target = random.choices(candidates, weights=weights, k=1)[0]
+        s = deepcopy(locked_schema)
+        self._apply_at_path(s, target.split("."), self._free_all)
+        return target, s
+
+    #------------------------------------------------------
+    # Value extraction helper
+    #------------------------------------------------------
+
+    @staticmethod
+    def extract_value(obj, path):
+        """Extract value from nested obj using dot-path with numeric array indices."""
+        for part in path.split("."):
+            if isinstance(obj, list):
+                obj = obj[int(part)]
+            else:
+                obj = obj[part]
+        return obj
+
     #------------------------------------------------------
     # Generation functions 
     #------------------------------------------------------
 
-
-    def type1_auto(self,tool_response:str, guided_json:str , model:str , prompt:str ,  how: Literal['random_one' , 'all'] = "random_one", howhow: Literal['smart' , 'dumb'] ='dumb' ,  batch_size: Literal['auto'] | int = 'auto' , max_model_len:int = 1024 , gpu_memory_utiliziation:float = 0.7): 
+    def type1_api(self, client, model: str, 
+                  tool_response: str, user_prompt: str,
+                  howhow: Literal['smart', 'dumb'] = 'smart',
+                  temperature: float = 0.8, max_tokens: int = 2048):
+        """Generate a hallucinated tool response via remote vLLM (OpenAI-compatible API).
+        
+        Uses user_prompt as the LLM input (NOT the original tool_response).
+        The guided_json schema forces structure + locks non-target fields.
+        
+        Returns: (hallucinated_dict, target_path, unlocked_paths)
+          - hallucinated_dict: the generated JSON as a dict
+          - target_path: the leaf that was initially chosen
+          - unlocked_paths: list of paths that were actually unlocked
         """
-        tool_response: str(dict)
-        guided_json : json.dumps(Nested_class.model_json_schema())
-        model: str 
-        how: random_one, all 
-        batch_size: auto, int 
+        locked = self.get_locked_schema_for_tool(tool_response)
 
-        Here the error of the type where we try to worsen the input in order to have a mismatch between the input 
-        tool_response and answer of the model 
+        if howhow == "smart":
+            target, unlocked_paths, schema_dict = self.create_cascade_schema(locked)
+        else:  # dumb
+            target, schema_dict = self.get_random_focused_schema(locked)
+            unlocked_paths = [target]
 
-        output:
-        generated text
-        """
-
-        llm = LLM(
-        model=model,
-        dtype="half",
-        enforce_eager=True,
-        gpu_memory_utilization=gpu_memory_utiliziation, 
-        max_model_len=max_model_len,
-        trust_remote_code=True
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant. Answer the user's question by calling the appropriate tool and returning the result as JSON."},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens,
+            extra_body={"guided_json": schema_dict},
         )
 
-        if guided_json is not None:
-            schema_str = guided_json
+        hallucinated = json.loads(resp.choices[0].message.content)
+        return hallucinated, target, unlocked_paths
+
+    #------------------------------------------------------
+    # Type 2: Overgeneration (single row)
+    #------------------------------------------------------
+
+    OVERGEN_SYSTEM = (
+        "You will see user query and original answer. "
+        "Your task is to suggest something with only one sentence "
+        "that will be relevant to an answer - do some kind of recommendation:"
+    )
+
+    def type2_api(
+        self,
+        client,
+        model: str,
+        user_prompt: str,
+        original_answer: str,
+        temperature: float = 0.7,
+        max_tokens: int = 150,
+    ) -> str:
+        """Generate a single-sentence overgeneration comment for an answer.
+
+        Returns the generated comment string.
+        """
+        user_content = json.dumps({
+            "user_prompt": user_prompt,
+            "original_answer": original_answer,
+        }, indent=2)
+
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": self.OVERGEN_SYSTEM},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return resp.choices[0].message.content.strip()
+
+    #------------------------------------------------------
+    # Full dataset generation
+    #------------------------------------------------------
+
+    def generate_type2_dataset(
+        self,
+        client,
+        model: str,
+        dataset: list[dict],
+        output_path: str,
+        temperature: float = 0.7,
+        max_tokens: int = 150,
+        max_retries: int = 3,
+    ) -> list[dict]:
+        """Generate Type 2 (overgeneration) for the entire dataset.
+
+        For each row, generates a one-sentence recommendation/comment
+        and appends it to the original answer.
+        Saves after each row (resumable). Returns the full list.
+        """
+        out = Path(output_path)
+
+        if out.exists():
+            with open(out, "r") as f:
+                generated = json.load(f)
+            start_idx = len(generated)
         else:
-            schema_str = self.json_to_guided_schema(tool_response)
-            
-        #generation part
-        if howhow == "smart": 
-            #smart means that we have cascade hallucinations starting from the highest node and containing all the following objects
-            schema_str = self.create_random_cascade_schema(schema_dict=schema_str)[1]
-        elif howhow == 'dumb':
-            schema_str = self.get_random_focused_schema(guided_json=schema_str)[1]
+            generated = []
+            start_idx = 0
 
+        skipped = 0
+        pbar = tqdm(range(start_idx, len(dataset)), initial=start_idx, total=len(dataset), desc="Overgen")
+        for idx in pbar:
+            row = dataset[idx]
+            original_answer = row["original_answer"].rstrip()
+
+            comment = None
+            for attempt in range(max_retries):
+                try:
+                    comment = self.type2_api(
+                        client=client,
+                        model=model,
+                        user_prompt=row["user_prompt"],
+                        original_answer=original_answer,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    )
+                    if comment:
+                        break
+                except Exception:
+                    comment = None
+
+            if not comment:
+                skipped += 1
+                pbar.set_postfix(done=len(generated), skipped=skipped)
+                continue
+
+            overgenerated_answer = original_answer + "\n\n" + comment
+
+            new_row = {
+                **row,
+                "overgenerated_answer": overgenerated_answer,
+                "overgeneration_comment": comment,
+                "hallucination_type": "type2_overgen",
+            }
+            generated.append(new_row)
+
+            with open(out, "w") as f:
+                json.dump(generated, f, ensure_ascii=False, indent=2)
+
+            pbar.set_postfix(done=len(generated), skipped=skipped)
+
+        print(f"Done: {len(generated)} rows saved to {output_path}, {skipped} skipped")
+        return generated
+
+    def generate_type1_dataset(
+        self,
+        client,
+        model: str,
+        dataset: list[dict],
+        output_path: str,
+        howhow: Literal['smart', 'dumb'] = 'smart',
+        temperature: float = 0.8,
+        max_tokens: int = 4096,
+        max_retries: int = 3,
+    ) -> list[dict]:
+        """Generate Type 1 hallucinated tool responses for the entire dataset.
         
-        try:
-            from vllm.sampling_params import GuidedDecodingParams
-            sampling_params = SamplingParams(
-                guided_decoding=GuidedDecodingParams(json=schema_str),
-                temperature=0.8,
-                max_tokens=500
-            )
-        except (ImportError, TypeError):
-
-            try:
-                sampling_params = SamplingParams(
-                    guided_json=schema_str,
-                    temperature=0.8,
-                    max_tokens=500
-                )
-            except TypeError:
-                sampling_params = SamplingParams(temperature=0.8, max_tokens=500)
-        output = llm.generate([prompt] , sampling_params=sampling_params)
-        return output[0].outputs[0].text 
+        Saves to output_path after EACH successful row (real-time append).
+        If the file already exists with partial results, resumes from where it left off.
+        
+        Returns the full list of generated rows.
+        """
+        out = Path(output_path)
+        
+        # Resume from existing partial results
+        if out.exists():
+            with open(out, "r") as f:
+                generated = json.load(f)
+            start_idx = len(generated)
+        else:
+            generated = []
+            start_idx = 0
+        
+        skipped = 0
+        pbar = tqdm(range(start_idx, len(dataset)), initial=start_idx, total=len(dataset), desc="Generating")
+        for idx in pbar:
+            row = dataset[idx]
+            
+            for attempt in range(max_retries):
+                try:
+                    hall_dict, target, unlocked_paths = self.type1_api(
+                        client=client,
+                        model=model,
+                        tool_response=row["tool_response"],
+                        user_prompt=row["user_prompt"],
+                        howhow=howhow,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    )
+                    break
+                except (json.JSONDecodeError, Exception) as e:
+                    hall_dict = None
+            
+            if hall_dict is None:
+                skipped += 1
+                pbar.set_postfix(done=len(generated), skipped=skipped)
+                continue
+            
+            new_row = {
+                **row,
+                "hallucinated_tool_response": json.dumps(hall_dict, ensure_ascii=False),
+                "hallucination_target": target,
+                "unlocked_paths": unlocked_paths,
+                "hallucination_type": f"type1_{howhow}",
+            }
+            generated.append(new_row)
+            
+            # Save after each row
+            with open(out, "w") as f:
+                json.dump(generated, f, ensure_ascii=False, indent=2)
+            
+            pbar.set_postfix(done=len(generated), skipped=skipped)
+        
+        print(f"Done: {len(generated)} rows saved to {output_path}, {skipped} skipped")
+        return generated
