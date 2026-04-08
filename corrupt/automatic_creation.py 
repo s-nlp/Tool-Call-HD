@@ -80,6 +80,10 @@ import math
 from pathlib import Path
 from tqdm.auto import tqdm
 
+import math
+from pathlib import Path
+from tqdm.auto import tqdm
+
 class HallucinationAuto():
     # Field names that look numeric but should stay as strings
     _KEEP_AS_STRING_KEYS = {"id", "zip", "zip_code", "postal_code", "postal", "code", 
@@ -433,8 +437,118 @@ class HallucinationAuto():
         return hallucinated, target, unlocked_paths
 
     #------------------------------------------------------
+    # Type 2: Overgeneration (single row)
+    #------------------------------------------------------
+
+    OVERGEN_SYSTEM = (
+        "You will see user query and original answer. "
+        "Your task is to suggest something with only one sentence "
+        "that will be relevant to an answer - do some kind of recommendation:"
+    )
+
+    def type2_api(
+        self,
+        client,
+        model: str,
+        user_prompt: str,
+        original_answer: str,
+        temperature: float = 0.7,
+        max_tokens: int = 150,
+    ) -> str:
+        """Generate a single-sentence overgeneration comment for an answer.
+
+        Returns the generated comment string.
+        """
+        user_content = json.dumps({
+            "user_prompt": user_prompt,
+            "original_answer": original_answer,
+        }, indent=2)
+
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": self.OVERGEN_SYSTEM},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return resp.choices[0].message.content.strip()
+
+    #------------------------------------------------------
     # Full dataset generation
     #------------------------------------------------------
+
+    def generate_type2_dataset(
+        self,
+        client,
+        model: str,
+        dataset: list[dict],
+        output_path: str,
+        temperature: float = 0.7,
+        max_tokens: int = 150,
+        max_retries: int = 3,
+    ) -> list[dict]:
+        """Generate Type 2 (overgeneration) for the entire dataset.
+
+        For each row, generates a one-sentence recommendation/comment
+        and appends it to the original answer.
+        Saves after each row (resumable). Returns the full list.
+        """
+        out = Path(output_path)
+
+        if out.exists():
+            with open(out, "r") as f:
+                generated = json.load(f)
+            start_idx = len(generated)
+        else:
+            generated = []
+            start_idx = 0
+
+        skipped = 0
+        pbar = tqdm(range(start_idx, len(dataset)), initial=start_idx, total=len(dataset), desc="Overgen")
+        for idx in pbar:
+            row = dataset[idx]
+            original_answer = row["original_answer"].rstrip()
+
+            comment = None
+            for attempt in range(max_retries):
+                try:
+                    comment = self.type2_api(
+                        client=client,
+                        model=model,
+                        user_prompt=row["user_prompt"],
+                        original_answer=original_answer,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    )
+                    if comment:
+                        break
+                except Exception:
+                    comment = None
+
+            if not comment:
+                skipped += 1
+                pbar.set_postfix(done=len(generated), skipped=skipped)
+                continue
+
+            overgenerated_answer = original_answer + "\n\n" + comment
+
+            new_row = {
+                **row,
+                "overgenerated_answer": overgenerated_answer,
+                "overgeneration_comment": comment,
+                "hallucination_type": "type2_overgen",
+            }
+            generated.append(new_row)
+
+            with open(out, "w") as f:
+                json.dump(generated, f, ensure_ascii=False, indent=2)
+
+            pbar.set_postfix(done=len(generated), skipped=skipped)
+
+        print(f"Done: {len(generated)} rows saved to {output_path}, {skipped} skipped")
+        return generated
 
     def generate_type1_dataset(
         self,
