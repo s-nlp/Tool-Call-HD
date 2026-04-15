@@ -49,6 +49,14 @@ def split_sentences(text: str) -> list[str]:
 def normalize_label(label: str) -> str:
     """Приводит label модели к ожидаемым именам."""
     value = label.lower().strip()
+    # LettuceDetect sometimes exposes generic HF labels instead of semantic names.
+    # Empirically for this model:
+    # - LABEL_0 behaves like supported
+    # - LABEL_1 behaves like unsupported / not grounded
+    if value == "label_0":
+        return "supported"
+    if value == "label_1":
+        return "unsupported"
     if value in {"supported", "unsupported", "contradicted"}:
         return value
     return value
