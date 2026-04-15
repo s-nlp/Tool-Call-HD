@@ -1,0 +1,15 @@
+{
+  "rows_total": 1419,
+  "rows_scored": 1419,
+  "average_score": 0.5394,
+  "fully_faithful": 557,
+  "low_score_lt_0_5": 574,
+  "min_score": 0.0,
+  "max_score": 1.0,
+  "label_totals": {
+    "supported": 1494,
+    "unsupported": 2990,
+    "contradicted": 0
+  },
+  "total_sentences": 4484
+}
