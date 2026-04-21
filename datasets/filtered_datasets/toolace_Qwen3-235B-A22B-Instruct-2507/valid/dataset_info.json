@@ -1,0 +1,94 @@
+{
+  "citation": "",
+  "description": "",
+  "features": {
+    "query": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "tool_call": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "context": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "output": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "quality": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "model": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "hallucination_labels": {
+      "feature": {
+        "end": {
+          "dtype": "int64",
+          "_type": "Value"
+        },
+        "source_value": {
+          "dtype": "string",
+          "_type": "Value"
+        },
+        "start": {
+          "dtype": "int64",
+          "_type": "Value"
+        },
+        "text": {
+          "dtype": "string",
+          "_type": "Value"
+        }
+      },
+      "_type": "List"
+    },
+    "hallucination_labels_processed": {
+      "correct": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "hallucination": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "missing_tool": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "overgeneration": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "undergeneration": {
+        "dtype": "int64",
+        "_type": "Value"
+      }
+    },
+    "judge_class": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "judge_class_second": {
+      "feature": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "_type": "List"
+    },
+    "judge_conf": {
+      "dtype": "float64",
+      "_type": "Value"
+    },
+    "judge_reason": {
+      "dtype": "string",
+      "_type": "Value"
+    }
+  },
+  "homepage": "",
+  "license": ""
+}
