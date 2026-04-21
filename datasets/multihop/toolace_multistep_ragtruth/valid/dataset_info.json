@@ -1,0 +1,69 @@
+{
+  "citation": "",
+  "description": "",
+  "features": {
+    "query": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "tool_call": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "context": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "output": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "quality": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "model": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "hallucination_labels": {
+      "feature": {
+        "dtype": "null",
+        "_type": "Value"
+      },
+      "_type": "List"
+    },
+    "hallucination_labels_processed": {
+      "correct": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "hallucination": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "missing_tool": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "overgeneration": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "undergeneration": {
+        "dtype": "int64",
+        "_type": "Value"
+      }
+    },
+    "dialogue_id": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "turn_number": {
+      "dtype": "int64",
+      "_type": "Value"
+    }
+  },
+  "homepage": "",
+  "license": ""
+}
