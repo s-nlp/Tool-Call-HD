@@ -1,0 +1,314 @@
+{
+  "counts": {
+    "total_rows": 11300,
+    "rows_with_any_tool_call": 8052,
+    "singlehop_exactly_one_tool_call": 7543,
+    "singlehop_completed_turn": 204,
+    "singlehop_ends_at_tool_call": 7339,
+    "singlehop_synthetic_final": 7293,
+    "multihop_structural_candidates": 235,
+    "multihop_without_followups": 235,
+    "multihop_final_clean": 186,
+    "other_rows": 3522,
+    "singlehop_synthetic_multihop_artifacts": 0,
+    "multihop_synthetic": 5,
+    "multihop_total_final": 191
+  },
+  "metrics": {
+    "source_all_rows": {
+      "label": "All rows",
+      "row_count": 11300,
+      "avg_dialogue_messages": 2.446,
+      "avg_dialogue_chars": 624.681,
+      "avg_before_tool_call_messages": 0.733,
+      "avg_before_tool_call_chars": 201.43,
+      "avg_after_tool_call_messages": 0.396,
+      "avg_after_tool_call_chars": 155.525,
+      "completed_turn_rows": 711,
+      "avg_after_completed_answer_messages": 3.693,
+      "avg_after_completed_answer_chars": 1617.747
+    },
+    "source_rows_with_any_tool_call": {
+      "label": ">=1 tool call",
+      "row_count": 8052,
+      "avg_dialogue_messages": 2.585,
+      "avg_dialogue_chars": 629.699,
+      "avg_before_tool_call_messages": 1.029,
+      "avg_before_tool_call_chars": 282.683,
+      "avg_after_tool_call_messages": 0.556,
+      "avg_after_tool_call_chars": 218.26,
+      "completed_turn_rows": 711,
+      "avg_after_completed_answer_messages": 3.693,
+      "avg_after_completed_answer_chars": 1617.747
+    },
+    "source_rows_with_any_completed_tool_turn": {
+      "label": ">=1 completed tool turn",
+      "row_count": 711,
+      "avg_dialogue_messages": 8.56,
+      "avg_dialogue_chars": 2755.172,
+      "avg_before_tool_call_messages": 1.27,
+      "avg_before_tool_call_chars": 219.073,
+      "avg_after_tool_call_messages": 6.29,
+      "avg_after_tool_call_chars": 2470.592,
+      "completed_turn_rows": 711,
+      "avg_after_completed_answer_messages": 3.693,
+      "avg_after_completed_answer_chars": 1617.747
+    },
+    "source_singlehop_exactly_one_tool_call": {
+      "label": "Exactly 1 tool call",
+      "row_count": 7543,
+      "avg_dialogue_messages": 2.159,
+      "avg_dialogue_chars": 489.734,
+      "avg_before_tool_call_messages": 1.021,
+      "avg_before_tool_call_chars": 289.038,
+      "avg_after_tool_call_messages": 0.138,
+      "avg_after_tool_call_chars": 67.48,
+      "completed_turn_rows": 204,
+      "avg_after_completed_answer_messages": 2.804,
+      "avg_after_completed_answer_chars": 1632.039
+    },
+    "source_exactly_one_completed_tool_turn": {
+      "label": "Exactly 1 completed tool turn",
+      "row_count": 476,
+      "avg_dialogue_messages": 7.508,
+      "avg_dialogue_chars": 2212.328,
+      "avg_before_tool_call_messages": 1.345,
+      "avg_before_tool_call_chars": 262.595,
+      "avg_after_tool_call_messages": 5.164,
+      "avg_after_tool_call_chars": 1876.599,
+      "completed_turn_rows": 476,
+      "avg_after_completed_answer_messages": 2.277,
+      "avg_after_completed_answer_chars": 1052.819
+    },
+    "source_exactly_one_completed_turn_and_one_tool_call": {
+      "label": "Exactly 1 completed turn + 1 tool call",
+      "row_count": 204,
+      "avg_dialogue_messages": 7.696,
+      "avg_dialogue_chars": 2867.877,
+      "avg_before_tool_call_messages": 1.578,
+      "avg_before_tool_call_chars": 298.26,
+      "avg_after_tool_call_messages": 5.118,
+      "avg_after_tool_call_chars": 2495.108,
+      "completed_turn_rows": 204,
+      "avg_after_completed_answer_messages": 2.804,
+      "avg_after_completed_answer_chars": 1632.039
+    },
+    "singlehop_completed_turn_subset": {
+      "label": "Completed turn",
+      "count": 204,
+      "share_percent": 2.704,
+      "avg_dialogue_messages": 7.696,
+      "avg_dialogue_chars": 2867.877,
+      "avg_before_tool_call_messages": 1.578,
+      "avg_before_tool_call_chars": 298.26,
+      "avg_after_tool_call_messages": 5.118,
+      "avg_after_tool_call_chars": 2495.108,
+      "avg_after_tool_response_messages": 3.804,
+      "avg_after_tool_response_chars": 2060.52
+    },
+    "singlehop_ends_at_tool_call_subset": {
+      "label": "Ends at tool call",
+      "count": 7339,
+      "share_percent": 97.296,
+      "avg_dialogue_messages": 2.005,
+      "avg_dialogue_chars": 423.63,
+      "avg_before_tool_call_messages": 1.005,
+      "avg_before_tool_call_chars": 288.782,
+      "avg_after_tool_call_messages": 0.0,
+      "avg_after_tool_call_chars": 0.0,
+      "avg_after_tool_response_messages": 0.0,
+      "avg_after_tool_response_chars": 0.0
+    },
+    "multihop_without_followups": {
+      "row_count": 235,
+      "avg_dialogue_messages": 10.689,
+      "avg_dialogue_chars": 3826.285,
+      "avg_before_tool_call_messages": 1.119,
+      "avg_before_tool_call_chars": 130.919,
+      "avg_after_tool_call_messages": 8.57,
+      "avg_after_tool_call_chars": 3645.311,
+      "avg_after_tool_response_messages": 7.562,
+      "avg_after_tool_response_chars": 3202.966,
+      "avg_after_assistant_answer_messages": 6.562,
+      "avg_after_assistant_answer_chars": 2733.591,
+      "avg_completed_tool_turns": 2.034,
+      "completed_tool_turn_distribution": {
+        "2": 227,
+        "3": 8
+      }
+    },
+    "multihop_final_clean": {
+      "row_count": 186,
+      "avg_dialogue_messages": 10.688,
+      "avg_dialogue_chars": 3760.237,
+      "avg_before_tool_call_messages": 1.129,
+      "avg_before_tool_call_chars": 134.704,
+      "avg_after_tool_call_messages": 8.559,
+      "avg_after_tool_call_chars": 3575.995,
+      "avg_after_tool_response_messages": 7.548,
+      "avg_after_tool_response_chars": 3130.516,
+      "avg_after_assistant_answer_messages": 6.548,
+      "avg_after_assistant_answer_chars": 2674.237,
+      "avg_completed_tool_turns": 2.032,
+      "completed_tool_turn_distribution": {
+        "2": 180,
+        "3": 6
+      }
+    },
+    "singlehop_synthetic_final": {
+      "row_count": 7293,
+      "avg_dialogue_messages": 4.001,
+      "avg_dialogue_chars": 1549.138,
+      "avg_before_tool_call_messages": 1.001,
+      "avg_before_tool_call_chars": 286.757,
+      "avg_after_tool_call_messages": 2,
+      "avg_after_tool_call_chars": 1127.531,
+      "avg_after_tool_response_messages": 1,
+      "avg_after_tool_response_chars": 431.903,
+      "avg_after_assistant_answer_messages": 0,
+      "avg_after_assistant_answer_chars": 0,
+      "avg_completed_tool_turns": 1,
+      "completed_tool_turn_distribution": {
+        "1": 7293
+      }
+    },
+    "singlehop_real_completed": {
+      "row_count": 204,
+      "avg_dialogue_messages": 7.696,
+      "avg_dialogue_chars": 2867.877,
+      "avg_before_tool_call_messages": 1.304,
+      "avg_before_tool_call_chars": 237.657,
+      "avg_after_tool_call_messages": 5.392,
+      "avg_after_tool_call_chars": 2546.142,
+      "avg_after_tool_response_messages": 3.804,
+      "avg_after_tool_response_chars": 2060.52,
+      "avg_after_assistant_answer_messages": 2.804,
+      "avg_after_assistant_answer_chars": 1632.039,
+      "avg_completed_tool_turns": 1,
+      "completed_tool_turn_distribution": {
+        "1": 204
+      }
+    },
+    "singlehop_synthetic_multihop_artifacts": {
+      "row_count": 0,
+      "avg_dialogue_messages": 0.0,
+      "avg_dialogue_chars": 0.0,
+      "avg_before_tool_call_messages": 0.0,
+      "avg_before_tool_call_chars": 0.0,
+      "avg_after_tool_call_messages": 0.0,
+      "avg_after_tool_call_chars": 0.0,
+      "avg_after_tool_response_messages": 0.0,
+      "avg_after_tool_response_chars": 0.0,
+      "avg_after_assistant_answer_messages": 0.0,
+      "avg_after_assistant_answer_chars": 0.0,
+      "avg_completed_tool_turns": 0.0,
+      "completed_tool_turn_distribution": {}
+    }
+  },
+  "extra": {
+    "multihop_cleaning_summary": {
+      "total_rows_seen": 235,
+      "candidate_rows": 76,
+      "changed_rows": 76,
+      "failed_rows": 0,
+      "failure_samples": []
+    },
+    "singlehop_filter_summary": {
+      "total_rows_seen": 11300,
+      "singlehop_rows_kept": 7543,
+      "selection_rule": "exactly one tool call message in the whole dialogue",
+      "examples": [
+        {
+          "dialogue_id": "toolace_00005",
+          "source_row_index": 5,
+          "completed_tool_turn_count": 1,
+          "llm_label": null,
+          "llm_reason": null,
+          "turns": [
+            {
+              "user": "Could you please show me the latest trending videos on YouTube?",
+              "tool_calls": [
+                "[Trending Videos()]"
+              ],
+              "assistant_answer": "Here are the latest trending videos on YouTube:\n\n1. \"Rick Astley - Never Gonna Give You Up\" has been popular for years as an internet meme. You can watch it [here](https://www.youtube.com/watch?v=dQw4w9WgXcQ). So far, it has gained 850,000,000 views, 10,000,000 likes, and 1,300,000 comments.\n\n![Rick Astley - Never Gonna Give You Up](https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg)\n\n2. \"Katy Perry - Roar\" is a hit song with an empowering message. You can listen to it [here](https://www.youtube.com/watch?v=CevxZvSJLk8). The video has racked up a whopping 3,200,000,000 views, 12,000,000 likes, and 2,250,000 comments.\n\n![Katy Perry - Roar](https://i.ytimg.com/vi/CevxZvSJLk8/hqdefault.jpg)\n\n3. \"Linkin Park - Numb\" is one of the most recognized songs from Linkin Park. You can enjoy it [here](https://www.youtube.com/watch?v=kXYiU_JCYtU). Until now, this video has collected 1,500,000,000 views, 17,000,000 likes, and 1,900,000 comments.\n\n![Linkin Park - Numb](https://i.ytimg.com/vi/kXYiU_JCYtU/hqdefault.jpg)\n\nPlease enjoy watching these trending videos!"
+            }
+          ]
+        },
+        {
+          "dialogue_id": "toolace_00008",
+          "source_row_index": 8,
+          "completed_tool_turn_count": 1,
+          "llm_label": null,
+          "llm_reason": null,
+          "turns": [
+            {
+              "user": "I need help analyzing the sentiment of some customer feedback. Here it is: \"The service was excellent, but the wait time was too long. I might not come back because of that.\"",
+              "tool_calls": [
+                "[Text Analysis(text=\"The service was excellent, but the wait time was too long. I might not come back because of that.\")]"
+              ],
+              "assistant_answer": "The sentiment analysis of the provided customer feedback text resulted in a \"negative\" sentiment. Despite the mention of \"excellent\" service, the concern over the long wait time and the possibility of not returning has influenced the overall sentiment to be negative. Additionally, the keywords extracted from the feedback are \"service,\" \"excellent,\" \"wait time,\" \"long,\" and \"come back,\" which highlight the main points of the customer's experience."
+            }
+          ]
+        },
+        {
+          "dialogue_id": "toolace_00009",
+          "source_row_index": 9,
+          "completed_tool_turn_count": 1,
+          "llm_label": null,
+          "llm_reason": null,
+          "turns": [
+            {
+              "user": "The hashtag I’m curious about is #funnychallenge. Could you fetch some details about it?",
+              "tool_calls": [
+                "[Hashtag Info API(hashtag=\"funnychallenge\")]"
+              ],
+              "assistant_answer": "The hashtag \"#funnychallenge\" on TikTok is associated with a popular challenge where participants create humorous videos to entertain the audience and engage with their followers. Here are some details about the hashtag:\n\n- **Description**: A popular TikTok challenge where participants create humorous videos to entertain the audience and engage with their followers.\n- **Challenge Type**: Entertainment\n- **Popularity**: The hashtag has been used in approximately 1,520,000 posts.\n- **Related Hashtags**: Some hashtags related to \"#funnychallenge\" include \"#comedy\", \"#laugh\", and \"#humor\".\n\nThis challenge falls under the 'Entertainment' type and has garnered significant popularity, making it a vibrant part of the TikTok community."
+            }
+          ]
+        },
+        {
+          "dialogue_id": "toolace_00012",
+          "source_row_index": 12,
+          "completed_tool_turn_count": 1,
+          "llm_label": null,
+          "llm_reason": null,
+          "turns": [
+            {
+              "user": "Could you show me the latest Instagram posts from the influencer @sunnydays? I'm particularly interested in their video content.",
+              "tool_calls": [
+                "[User Feed (Video Posts) V2(username=\"sunnydays\")]"
+              ],
+              "assistant_answer": "Here are the latest Instagram video posts from the influencer @sunnydays:\n\n1. **Title:** A sunny day at the beach\n   - **Description:** Enjoying the warm sun and cool waves at Santa Monica!\n   - **Views:** 254,778\n   - **Likes:** 12,000\n   - **Comments:** 350\n\n2. **Title:** Morning yoga routine\n   - **Description:** Starting the day with some energizing yoga poses.\n   - **Views:** 150,234\n   - **Likes:** 8,900\n   - **Comments:** 210\n\n3. **Title:** Quick smoothie recipe\n   - **Description:** Here’s how I make my favorite berry smoothie in just 5 minutes.\n   - **Views:** 178,945\n   - **Likes:** 9,650\n   - **Comments:** 415\n\nLet me know if you need more information or if there is something specific you are looking for regarding these videos!"
+            }
+          ]
+        },
+        {
+          "dialogue_id": "toolace_00015",
+          "source_row_index": 15,
+          "completed_tool_turn_count": 1,
+          "llm_label": null,
+          "llm_reason": null,
+          "turns": [
+            {
+              "user": "Could you please find the current time for the location with IP address 192.168.1.1?",
+              "tool_calls": [
+                "[Get Current Time by IP(ipv4=\"192.168.1.1\")]"
+              ],
+              "assistant_answer": "The current time for the location with IP address 192.168.1.1 is 2025-04-05 10:19:07."
+            }
+          ]
+        }
+      ]
+    },
+    "singlehop_synthetic_summary": {
+      "source_path": "datasets/singlehop/singlehop_all_ends_at_tool_call_examples_with_assistant_and_tool_response_v3_filtered.json",
+      "output_path": "datasets/singlehop/toolace_singlehop_synthetic_v3_filtered_toolace.json",
+      "rows": 7298,
+      "format": "ToolACE",
+      "fields": [
+        "system",
+        "conversations"
+      ]
+    }
+  }
+}

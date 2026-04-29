@@ -1,0 +1,13 @@
+metric,value
+Total ToolACE rows,11300
+Rows with >=1 tool call,8052
+Singlehop exactly 1 tool call,7543
+Singlehop completed turn subset,204
+Singlehop ends at tool call,7339
+Singlehop synthetic final,7293
+Multihop structural candidates,235
+Multihop without followups,235
+Multihop final clean,186
+Multihop synthetic,5
+Multihop total final,191
+Other rows,3522
