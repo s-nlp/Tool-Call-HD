@@ -145,10 +145,6 @@
       "avg_before_tool_call_chars": 134.704,
       "avg_after_tool_call_messages": 8.559,
       "avg_after_tool_call_chars": 3575.995,
-      "avg_after_tool_response_messages": 7.548,
-      "avg_after_tool_response_chars": 3130.516,
-      "avg_after_assistant_answer_messages": 6.548,
-      "avg_after_assistant_answer_chars": 2674.237,
       "avg_completed_tool_turns": 2.032,
       "completed_tool_turn_distribution": {
         "2": 180,
@@ -163,10 +159,6 @@
       "avg_before_tool_call_chars": 286.757,
       "avg_after_tool_call_messages": 2,
       "avg_after_tool_call_chars": 1127.531,
-      "avg_after_tool_response_messages": 1,
-      "avg_after_tool_response_chars": 431.903,
-      "avg_after_assistant_answer_messages": 0,
-      "avg_after_assistant_answer_chars": 0,
       "avg_completed_tool_turns": 1,
       "completed_tool_turn_distribution": {
         "1": 7293
@@ -180,10 +172,6 @@
       "avg_before_tool_call_chars": 237.657,
       "avg_after_tool_call_messages": 5.392,
       "avg_after_tool_call_chars": 2546.142,
-      "avg_after_tool_response_messages": 3.804,
-      "avg_after_tool_response_chars": 2060.52,
-      "avg_after_assistant_answer_messages": 2.804,
-      "avg_after_assistant_answer_chars": 1632.039,
       "avg_completed_tool_turns": 1,
       "completed_tool_turn_distribution": {
         "1": 204
@@ -203,112 +191,20 @@
       "avg_after_assistant_answer_chars": 0.0,
       "avg_completed_tool_turns": 0.0,
       "completed_tool_turn_distribution": {}
-    }
-  },
-  "extra": {
-    "multihop_cleaning_summary": {
-      "total_rows_seen": 235,
-      "candidate_rows": 76,
-      "changed_rows": 76,
-      "failed_rows": 0,
-      "failure_samples": []
     },
-    "singlehop_filter_summary": {
-      "total_rows_seen": 11300,
-      "singlehop_rows_kept": 7543,
-      "selection_rule": "exactly one tool call message in the whole dialogue",
-      "examples": [
-        {
-          "dialogue_id": "toolace_00005",
-          "source_row_index": 5,
-          "completed_tool_turn_count": 1,
-          "llm_label": null,
-          "llm_reason": null,
-          "turns": [
-            {
-              "user": "Could you please show me the latest trending videos on YouTube?",
-              "tool_calls": [
-                "[Trending Videos()]"
-              ],
-              "assistant_answer": "Here are the latest trending videos on YouTube:\n\n1. \"Rick Astley - Never Gonna Give You Up\" has been popular for years as an internet meme. You can watch it [here](https://www.youtube.com/watch?v=dQw4w9WgXcQ). So far, it has gained 850,000,000 views, 10,000,000 likes, and 1,300,000 comments.\n\n![Rick Astley - Never Gonna Give You Up](https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg)\n\n2. \"Katy Perry - Roar\" is a hit song with an empowering message. You can listen to it [here](https://www.youtube.com/watch?v=CevxZvSJLk8). The video has racked up a whopping 3,200,000,000 views, 12,000,000 likes, and 2,250,000 comments.\n\n![Katy Perry - Roar](https://i.ytimg.com/vi/CevxZvSJLk8/hqdefault.jpg)\n\n3. \"Linkin Park - Numb\" is one of the most recognized songs from Linkin Park. You can enjoy it [here](https://www.youtube.com/watch?v=kXYiU_JCYtU). Until now, this video has collected 1,500,000,000 views, 17,000,000 likes, and 1,900,000 comments.\n\n![Linkin Park - Numb](https://i.ytimg.com/vi/kXYiU_JCYtU/hqdefault.jpg)\n\nPlease enjoy watching these trending videos!"
-            }
-          ]
-        },
-        {
-          "dialogue_id": "toolace_00008",
-          "source_row_index": 8,
-          "completed_tool_turn_count": 1,
-          "llm_label": null,
-          "llm_reason": null,
-          "turns": [
-            {
-              "user": "I need help analyzing the sentiment of some customer feedback. Here it is: \"The service was excellent, but the wait time was too long. I might not come back because of that.\"",
-              "tool_calls": [
-                "[Text Analysis(text=\"The service was excellent, but the wait time was too long. I might not come back because of that.\")]"
-              ],
-              "assistant_answer": "The sentiment analysis of the provided customer feedback text resulted in a \"negative\" sentiment. Despite the mention of \"excellent\" service, the concern over the long wait time and the possibility of not returning has influenced the overall sentiment to be negative. Additionally, the keywords extracted from the feedback are \"service,\" \"excellent,\" \"wait time,\" \"long,\" and \"come back,\" which highlight the main points of the customer's experience."
-            }
-          ]
-        },
-        {
-          "dialogue_id": "toolace_00009",
-          "source_row_index": 9,
-          "completed_tool_turn_count": 1,
-          "llm_label": null,
-          "llm_reason": null,
-          "turns": [
-            {
-              "user": "The hashtag I’m curious about is #funnychallenge. Could you fetch some details about it?",
-              "tool_calls": [
-                "[Hashtag Info API(hashtag=\"funnychallenge\")]"
-              ],
-              "assistant_answer": "The hashtag \"#funnychallenge\" on TikTok is associated with a popular challenge where participants create humorous videos to entertain the audience and engage with their followers. Here are some details about the hashtag:\n\n- **Description**: A popular TikTok challenge where participants create humorous videos to entertain the audience and engage with their followers.\n- **Challenge Type**: Entertainment\n- **Popularity**: The hashtag has been used in approximately 1,520,000 posts.\n- **Related Hashtags**: Some hashtags related to \"#funnychallenge\" include \"#comedy\", \"#laugh\", and \"#humor\".\n\nThis challenge falls under the 'Entertainment' type and has garnered significant popularity, making it a vibrant part of the TikTok community."
-            }
-          ]
-        },
-        {
-          "dialogue_id": "toolace_00012",
-          "source_row_index": 12,
-          "completed_tool_turn_count": 1,
-          "llm_label": null,
-          "llm_reason": null,
-          "turns": [
-            {
-              "user": "Could you show me the latest Instagram posts from the influencer @sunnydays? I'm particularly interested in their video content.",
-              "tool_calls": [
-                "[User Feed (Video Posts) V2(username=\"sunnydays\")]"
-              ],
-              "assistant_answer": "Here are the latest Instagram video posts from the influencer @sunnydays:\n\n1. **Title:** A sunny day at the beach\n   - **Description:** Enjoying the warm sun and cool waves at Santa Monica!\n   - **Views:** 254,778\n   - **Likes:** 12,000\n   - **Comments:** 350\n\n2. **Title:** Morning yoga routine\n   - **Description:** Starting the day with some energizing yoga poses.\n   - **Views:** 150,234\n   - **Likes:** 8,900\n   - **Comments:** 210\n\n3. **Title:** Quick smoothie recipe\n   - **Description:** Here’s how I make my favorite berry smoothie in just 5 minutes.\n   - **Views:** 178,945\n   - **Likes:** 9,650\n   - **Comments:** 415\n\nLet me know if you need more information or if there is something specific you are looking for regarding these videos!"
-            }
-          ]
-        },
-        {
-          "dialogue_id": "toolace_00015",
-          "source_row_index": 15,
-          "completed_tool_turn_count": 1,
-          "llm_label": null,
-          "llm_reason": null,
-          "turns": [
-            {
-              "user": "Could you please find the current time for the location with IP address 192.168.1.1?",
-              "tool_calls": [
-                "[Get Current Time by IP(ipv4=\"192.168.1.1\")]"
-              ],
-              "assistant_answer": "The current time for the location with IP address 192.168.1.1 is 2025-04-05 10:19:07."
-            }
-          ]
-        }
-      ]
-    },
-    "singlehop_synthetic_summary": {
-      "source_path": "datasets/singlehop/singlehop_all_ends_at_tool_call_examples_with_assistant_and_tool_response_v3_filtered.json",
-      "output_path": "datasets/singlehop/toolace_singlehop_synthetic_v3_filtered_toolace.json",
-      "rows": 7298,
-      "format": "ToolACE",
-      "fields": [
-        "system",
-        "conversations"
-      ]
+    "multihop_total_final": {
+      "row_count": 191,
+      "avg_dialogue_messages": 10.681,
+      "avg_dialogue_chars": 3770.99,
+      "avg_before_tool_call_messages": 1.126,
+      "avg_before_tool_call_chars": 136.005,
+      "avg_after_tool_call_messages": 8.555,
+      "avg_after_tool_call_chars": 3583.812,
+      "avg_completed_tool_turns": 2.031,
+      "completed_tool_turn_distribution": {
+        "2": 185,
+        "3": 6
+      }
     }
   }
 }

@@ -1,0 +1,65 @@
+services:
+  vllm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: local/qwen25-vllm:cuda12.1
+    container_name: qwen25-vllm
+    ipc: host
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    environment:
+      - CUDA_DEVICE_ORDER=PCI_BUS_ID
+      - CUDA_VISIBLE_DEVICES=0,1,2,3
+      - HF_HOME=/root/.cache/huggingface
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+      - VLLM_ENABLE_CUDA_COMPATIBILITY=1
+
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+
+    expose:
+      - "8000"
+
+    command: >
+      --model Qwen/Qwen2.5-14B-Instruct
+      --host 0.0.0.0
+      --port 8000
+      --served-model-name qwen2.5-14b-instruct
+      --tensor-parallel-size 4
+      --max-model-len 8192
+      --gpu-memory-utilization 0.9
+      --enforce-eager
+      --dtype=half
+
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 600s
+
+  nginx:
+    image: nginx:alpine
+    container_name: qwen25-proxy
+    depends_on:
+      vllm:
+        condition: service_started
+    ports:
+      - "8088:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./api_keys.conf:/etc/nginx/conf.d/api_keys.conf:ro
+    restart: unless-stopped
+
+volumes:
+  hf_cache:
+    driver: local

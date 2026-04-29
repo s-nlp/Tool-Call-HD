@@ -9,7 +9,13 @@
 - `8,052` содержат хотя бы один `tool call`
 - `7,543` содержат **ровно один** распознанный `tool call` в исходной строке датасета
 - `235` попали в structural `multihop`-подмножество, где есть как минимум два завершённых tool-use шага
-- остальные `3,522` не попали ни в `singlehop`, ни в наш structural `multihop`
+- `3,522` строки не попали в обработку `singlehop/multihop`
+
+Что это за `3,522` строки:
+
+- диалоги без `tool call`
+- диалоги с несколькими tool call, но без нашей structural multi-hop цепочки
+- нестандартные или незавершённые случаи, которые не проходят наши строгие правила отбора
 
 ![ToolACE Processing Counts](/datasets/toolace_processing_report/toolace_processing_counts.png)
 
@@ -21,12 +27,12 @@
 
 `user -> assistant(tool call) -> tool -> assistant(answer)`
 
-После структурной фильтрации получилось `235` строк. Затем был выполнен cleaning, и основной real multihop-набор составил `186` строк. Дополнительно после synthetic-этапа было найдено ещё `5` multi-hop диалогов, которые вынесены в отдельный synthetic multihop-файл.
+После structural-фильтрации получилось `235` строк. Затем был выполнен cleaning, и основной real multihop-набор составил `186` строк. Дополнительно после synthetic-этапа было найдено ещё `5` multi-hop диалогов, которые были возвращены в multihop-часть датасета.
 
 - `datasets/multihop/toolace_multistep_without_followups.json` -> `235`
 - `datasets/multihop/toolace_multistep_clean.json` -> `186`
 - `datasets/multihop/multihop_synthetic_toolace.json` -> `5`
-- итоговый multihop объём с synthetic-добавкой -> `191`
+- итоговый `multihop total` -> `191`
 
 ![Multihop Refinement](/datasets/toolace_processing_report/toolace_multihop_refinement.png)
 
@@ -60,10 +66,13 @@
 1. сгенерирован `tool_response`
 2. затем на его основе сгенерирован финальный `assistant`
 3. строки с нежелательными паттернами вроде `error` / `unavailable` были удалены
+4. из результата были убраны synthetic multi-hop артефакты
 
-Первичный synthetic-набор дал `7,298` строк. После более аккуратной перепроверки оказалось, что среди них было `5` диалогов, где в полном контексте уже присутствовал более ранний завершённый tool-use шаг. Эти случаи были отделены, и в текущем рабочем synthetic-файле осталось:
+Итоговое разбиение:
 
-- `7,293` synthetic `singlehop`
+- `singlehop_real`: `204`
+- `singlehop_synthetic`: `7,293`
+- `multihop_synthetic`: `5`
 
 Текущие файлы:
 
@@ -80,8 +89,9 @@
 - исходный `singlehop` с ровно 1 tool call: `2.159`
 - real completed `singlehop` (`204`): `7.696`
 - synthetic final `singlehop` (`7293`): `4.001`
-- real `multihop` `235`: `10.689`
+- structural `multihop` `235`: `10.689`
 - final clean `multihop` `186`: `10.688`
+- final total `multihop` `191`: `10.681`
 
 Средняя длина в символах:
 
@@ -89,41 +99,21 @@
 - исходный `singlehop exact1`: `489.734`
 - real completed `singlehop` (`204`): `2867.877`
 - synthetic final `singlehop` (`7293`): `1549.138`
-- real `multihop` `235`: `3826.285`
+- structural `multihop` `235`: `3826.285`
 - final clean `multihop` `186`: `3760.237`
+- final total `multihop` `191`: `3770.99`
 
 ![Average Dialogue Messages](/datasets/toolace_processing_report/toolace_avg_dialogue_messages_comparison.png)
 
 ![Average Dialogue Chars](/datasets/toolace_processing_report/toolace_avg_dialogue_chars_comparison.png)
 
-## Позиция `tool call` внутри диалога
-
-Среднее число сообщений **до первого tool call**:
-
-- исходный `singlehop exact1`: `1.021`
-- real completed `singlehop` (`204`): `1.304`
-- synthetic final `singlehop` (`7293`): `1.001`
-- real `multihop` `235`: `1.119`
-- final clean `multihop` `186`: `1.129`
-
-Среднее число сообщений **после первого tool call**:
-
-- исходный `singlehop exact1`: `0.138`
-- real completed `singlehop` (`204`): `5.392`
-- synthetic final `singlehop` (`7293`): `2`
-- real `multihop` `235`: `8.57`
-- final clean `multihop` `186`: `8.559`
-
-Это иллюстрирует, что исходный `singlehop` почти всегда обрывался сразу после `tool call`, а synthetic-версия превращает его в завершённый одношаговый tool-use диалог.
-
-![Before/After Tool Call Messages](/datasets/toolace_processing_report/toolace_before_after_tool_call_messages.png)
-
-![Before/After Tool Call Chars](/datasets/toolace_processing_report/toolace_before_after_tool_call_chars.png)
-
 ## Что получилось в итоге
 
-На выходе есть три practically useful набора:
+На выходе есть четыре итоговых части:
 
-- `multihop`: `186` clean-диалогов с действительно завершёнными multi-step tool-use цепочками
-- `singlehop_real`: `204` исходных завершённых singlehop-диалогов
-- `singlehop_synthetic`: `7,293` синтетически достроенных singlehop-диалогов
+- `multihop_real`: `186`
+- `multihop_synthetic`: `5`
+- `multihop_total`: `191`
+- `singlehop_real`: `204`
+- `singlehop_synthetic`: `7,293`
+- `singlehop_total`: `7497`
