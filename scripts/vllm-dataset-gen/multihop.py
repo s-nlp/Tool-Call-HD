@@ -473,13 +473,18 @@ class MultihopMixin:
         hallucination_labels, plain_answer (from label_type1_dataset).
         """
         lookup = {r["user_prompt"]: r for r in type1_labelled
-                  if r.get("user_prompt") and r.get("hallucinated_tool_response")}
+                  if r.get("user_prompt") and r.get("hallucinated_tool_response")
+                  and r.get("hallucination_labels")}   # drop no-op rows from source
         dataset, log = self._inject_last_turn(multistep, lookup, "type1")
+        # Drop dialogues where guided decoding changed nothing
+        before = len(dataset)
+        dataset = [d for d in dataset if not d.get("skipped")]
+        dropped = before - len(dataset)
         with open(output_path, "w") as f:
             json.dump(dataset, f, ensure_ascii=False, indent=2)
         tagged = sum(e["has_tags"] for e in log)
         print(f"Type1 multistep: {len(log)}/{len(multistep)} injected, "
-              f"{tagged} with <hall> tags → {output_path}")
+              f"{tagged} with <hall> tags, {dropped} no-op dropped → {output_path}")
         return dataset
 
     def generate_multistep_type2(self, multistep: list, type2_data: list,
@@ -593,6 +598,9 @@ class MultihopMixin:
                 spans, summary = self.evaluate_hallucination(
                     original_data, hall_dict, unlocked_paths
                 )
+                if not spans:
+                    # LLM returned same values — no real hallucination, retry
+                    continue
                 enriched = {
                     **row,
                     "hallucinated_tool_response": json.dumps(hall_dict, ensure_ascii=False),

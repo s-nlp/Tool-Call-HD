@@ -616,6 +616,9 @@ class SinglehopMixin:
                     spans, summary = self.evaluate_hallucination(
                         original_data, hall_dict, unlocked_paths
                     )
+                    if not spans:
+                        # LLM returned same values — no real hallucination, drop row
+                        continue
                     generated.append({
                         **row,
                         "hallucinated_tool_response": json.dumps(hall_dict, ensure_ascii=False),
