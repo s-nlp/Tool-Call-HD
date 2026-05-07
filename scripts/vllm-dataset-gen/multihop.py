@@ -485,6 +485,9 @@ class MultihopMixin:
         tagged = sum(e["has_tags"] for e in log)
         print(f"Type1 multistep: {len(log)}/{len(multistep)} injected, "
               f"{tagged} with <hall> tags, {dropped} no-op dropped → {output_path}")
+        csv = self._save_ragtruth_alongside(output_path)
+        if csv:
+            print(f"      RAGTruth JSONL: {csv}")
         return dataset
 
     def generate_multistep_type2(self, multistep: list, type2_data: list,
@@ -501,6 +504,9 @@ class MultihopMixin:
         tagged = sum(e["has_tags"] for e in log)
         print(f"Type2 multistep: {len(log)}/{len(multistep)} injected, "
               f"{tagged} with <hall> tags → {output_path}")
+        csv = self._save_ragtruth_alongside(output_path)
+        if csv:
+            print(f"      RAGTruth JSONL: {csv}")
         return dataset
 
     def generate_multistep_type3(self, multistep: list, type3_data: list,
@@ -517,6 +523,9 @@ class MultihopMixin:
         tagged = sum(e["has_tags"] for e in log)
         print(f"Type3 multistep: {len(log)}/{len(multistep)} injected, "
               f"{tagged} with <hall> tags → {output_path}")
+        csv = self._save_ragtruth_alongside(output_path)
+        if csv:
+            print(f"      RAGTruth JSONL: {csv}")
         return dataset
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -808,5 +817,11 @@ class MultihopMixin:
         print(f"  type1 → {len(all_type1)} dialogues ({out/'pruned_type1.json'})")
         print(f"  type2 → {len(all_type2)} dialogues ({out/'pruned_type2.json'})")
         print(f"  type3 → {len(all_type3)} dialogues ({out/'pruned_type3.json'})")
+
+        # Also save RAGTruth CSVs alongside each JSON
+        for fname in ("pruned_type1.json", "pruned_type2.json", "pruned_type3.json"):
+            csv = self._save_ragtruth_alongside(str(out / fname))
+            if csv:
+                print(f"  RAGTruth JSONL: {csv}")
 
         return all_type1, all_type2, all_type3

@@ -42,6 +42,24 @@ class ExportMixin:
         return ExportMixin._TAG_RE.sub("", text)
 
     @staticmethod
+    def _extract_hall_spans(text: str) -> tuple:
+        """Strip <hall>...</hall> tags and return (clean_text, spans).
+
+        spans = list of (start, end, content) where start/end are char offsets
+        into the cleaned text and content is the hallucinated substring.
+        """
+        spans, clean, pos = [], "", 0
+        for m in re.finditer(r'<hall>(.*?)</hall>', text, re.DOTALL):
+            clean += text[pos:m.start()]
+            s = len(clean)
+            content = m.group(1)
+            clean += content
+            spans.append((s, len(clean), content))
+            pos = m.end()
+        clean += text[pos:]
+        return clean, spans
+
+    @staticmethod
     def _find_in_output(text: str, clean_output: str) -> tuple:
         """Locate *text* inside *clean_output* using 7 fallback strategies.
 
@@ -198,12 +216,120 @@ class ExportMixin:
 
     # ── Row converter ─────────────────────────────────────────────────────────
 
+    def _multistep_to_ragtruth_row(self, item: dict, row_id: int) -> dict:
+        """Convert a multistep dialogue (with <hall> tags) into a RAGTruth row.
+
+        Multistep input format (from generate_multistep_type* / pruned output):
+          - 'system'        — tool list / instructions
+          - 'conversations' — list of {from, value} turns; the last assistant
+                              answer carries <hall>...</hall> spans
+          - 'hallucination_type' — "type1" / "type2" / "type3"
+
+        For RAGTruth:
+          - query    = last user prompt before the hallucinated answer
+          - context  = last tool turn value (corrupted for type1/2, original for type3)
+          - output   = last assistant answer with <hall> tags stripped
+          - labels   = char offsets of stripped <hall> spans
+          - input_str = full dialogue history up to (but not including) the answer
+        """
+        convs = item.get("conversations", [])
+        h_type = item.get("hallucination_type", "")
+
+        # Find last assistant turn (with <hall> tags if present)
+        last_ass_idx = None
+        for i in range(len(convs) - 1, -1, -1):
+            if convs[i].get("from") == "assistant" and "<hall>" in convs[i].get("value", ""):
+                last_ass_idx = i
+                break
+        if last_ass_idx is None:  # fallback: last assistant of any kind
+            for i in range(len(convs) - 1, -1, -1):
+                if convs[i].get("from") == "assistant":
+                    last_ass_idx = i
+                    break
+        if last_ass_idx is None:
+            return None
+
+        # Find tool turn before the assistant answer
+        last_tool_idx = next(
+            (i for i in range(last_ass_idx - 1, -1, -1) if convs[i].get("from") == "tool"),
+            None,
+        )
+        # Find user turn before the tool turn
+        last_user_idx = None
+        if last_tool_idx is not None:
+            last_user_idx = next(
+                (i for i in range(last_tool_idx - 1, -1, -1) if convs[i].get("from") == "user"),
+                None,
+            )
+
+        # Strip <hall> tags and capture span offsets in the cleaned output
+        raw_answer = convs[last_ass_idx].get("value", "")
+        clean_output, hall_spans = self._extract_hall_spans(raw_answer)
+
+        # Build RAGTruth labels
+        label_type_map = {
+            "type1": "Evident Conflict",
+            "type2": "Evident Baseless Info",
+            "type3": "Overgeneration",
+        }
+        label_type = label_type_map.get(h_type, "Evident Conflict")
+        labels = [
+            {
+                "start": s,
+                "end": e,
+                "text": txt,
+                "meta": f"{label_type.upper()}\nMultistep dialogue ({h_type})",
+                "label_type": label_type,
+                "implicit_true": False,
+                "due_to_null": h_type == "type2",
+            }
+            for s, e, txt in hall_spans
+        ]
+        summary = {"evident_conflict": 0, "baseless_info": 0}
+        if h_type == "type1":
+            summary["evident_conflict"] = len(labels)
+        elif h_type == "type2":
+            summary["baseless_info"] = len(labels)
+        elif h_type == "type3":
+            summary["overgeneration"] = len(labels)
+
+        query = convs[last_user_idx].get("value", "") if last_user_idx is not None else ""
+        context = convs[last_tool_idx].get("value", "") if last_tool_idx is not None else ""
+
+        # input_str: full conversation history up to (but not including) the hallucinated answer
+        parts = []
+        if item.get("system"):
+            parts.append(f"System:\n{item['system']}")
+        for i in range(last_ass_idx):
+            c = convs[i]
+            role = c.get("from", "?").capitalize()
+            parts.append(f"{role}:\n{c.get('value', '')}")
+
+        return {
+            "id": row_id,
+            "query": query,
+            "context": context,
+            "output": clean_output,
+            "task_type": f"multistep_{h_type}",
+            "quality": "good",
+            "model": "",
+            "temperature": "",
+            "hallucination_labels": json.dumps(labels),
+            "hallucination_labels_processed": json.dumps(summary),
+            "input_str": "\n\n".join(parts),
+        }
+
     def _item_to_ragtruth_row(self, item: dict, row_id: int) -> dict:
         """Convert one generated item into a RAGTruth-compatible row dict.
 
-        Detects hallucination_type automatically and routes to the right
-        label extractor.
+        Auto-detects format:
+          - multistep dialogue (has 'conversations' field) → uses _multistep_to_ragtruth_row
+          - singlehop row (flat) → uses the type-specific label extractors
         """
+        # Multistep dispatch
+        if "conversations" in item:
+            return self._multistep_to_ragtruth_row(item, row_id)
+
         h_type = item.get("hallucination_type", "")
         is_overgen = h_type in ("type2_overgen", "type3_tool_overgen")
         is_type1 = h_type.startswith("type1_")
@@ -249,21 +375,28 @@ class ExportMixin:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def to_dataset(self, input_data, output_format: Literal["json", "ragtruth"] = "ragtruth",
+    def to_dataset(self, input_data,
+                   output_format: Literal["jsonl", "ragtruth", "json"] = "jsonl",
                    output_path: Optional[str] = None):
         """Convert generated hallucination data to a structured dataset file.
+
+        All three formats use the SAME RAGTruth-style row schema:
+          id, query, context, output, task_type, quality, model, temperature,
+          hallucination_labels, hallucination_labels_processed, input_str
 
         input_data:
           Path to a JSON file from generate_type*_dataset, OR a list of dicts.
 
         output_format:
-          "ragtruth" → CSV matching the wandb/RAGTruth-processed schema
-          "json"     → list of row dicts (saved or returned in-memory)
+          "jsonl"     → JSON Lines (one row per line) — DEFAULT
+          "ragtruth"  → CSV matching the wandb/RAGTruth-processed schema
+          "json"      → JSON array of row dicts (saved or returned in-memory)
 
         output_path:
           Override the default output path.
+          For "jsonl":    defaults to <input_stem>.jsonl
           For "ragtruth": defaults to <input_stem>_ragtruth.csv
-          For "json": if None, returns the list in memory
+          For "json":     if None, returns the list in memory
 
         Returns:
           str (file path) or list (for in-memory "json" mode)
@@ -279,6 +412,20 @@ class ExportMixin:
 
         rows = [self._item_to_ragtruth_row(item, i + 1) for i, item in enumerate(items)]
 
+        # ── JSONL (default) ──────────────────────────────────────────────────
+        if output_format == "jsonl":
+            if output_path is not None:
+                out = Path(output_path)
+            elif input_path is not None:
+                out = input_path.with_suffix(".jsonl")
+            else:
+                raise ValueError("output_path is required when input_data is a list")
+            with open(out, "w", encoding="utf-8") as f:
+                for row in rows:
+                    f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            return str(out)
+
+        # ── JSON array ───────────────────────────────────────────────────────
         if output_format == "json":
             if output_path is None:
                 return rows
@@ -287,7 +434,7 @@ class ExportMixin:
                 json.dump(rows, f, ensure_ascii=False, indent=2)
             return str(out)
 
-        # ragtruth → CSV
+        # ── RAGTruth CSV ─────────────────────────────────────────────────────
         if output_path is not None:
             out = Path(output_path)
         elif input_path is not None:

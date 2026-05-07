@@ -36,6 +36,21 @@ from tqdm.auto import tqdm
 
 class SinglehopMixin:
 
+    def _save_ragtruth_alongside(self, json_path: str) -> str:
+        """After saving the rich JSON to *json_path*, also save a RAGTruth-format
+        JSONL next to it (same stem, .jsonl extension).
+
+        Returns the JSONL path. Auto-detects singlehop vs multistep format.
+        """
+        try:
+            jsonl_path = str(Path(json_path).with_suffix(".jsonl"))
+            self.to_dataset(json_path, output_format="jsonl", output_path=jsonl_path)
+            return jsonl_path
+        except Exception as e:
+            print(f"  [warn] RAGTruth JSONL write failed: {e}")
+            return ""
+
+
     # ── System prompts (override by passing system_prompt= to the API methods) ──
 
     TYPE1_SYSTEM_PROMPT = (
@@ -641,15 +656,27 @@ class SinglehopMixin:
                 json.dump(generated, f, ensure_ascii=False, indent=2)
 
         print(f"Done: {len(generated)} rows saved to {output_path}, {skipped} skipped")
+        csv = self._save_ragtruth_alongside(output_path)
+        if csv:
+            print(f"      RAGTruth JSONL: {csv}")
         return generated
 
     def generate_type2_dataset(self, dataset: list, output_path: str) -> list:
         """Generate Type 2 hallucinations for an entire dataset (no LLM, resumable).
 
+        Rows missing 'tagged_answer' are auto-tagged via _tag_row before deletion.
+
         Each output row adds:
           reduced_tool_response, deleted_paths, deletion_target, hallucination_spans,
           hallucination_type
         """
+        # Auto-tag rows missing tagged_answer
+        missing = sum(1 for r in dataset if not r.get("tagged_answer"))
+        if missing:
+            print(f"  [type2] {missing} rows missing 'tagged_answer' — auto-tagging...")
+            dataset = [self._tag_row(r) if not r.get("tagged_answer") else r
+                       for r in dataset]
+
         out = Path(output_path)
         generated = []
         if out.exists() and out.stat().st_size > 0:
@@ -661,6 +688,16 @@ class SinglehopMixin:
         for idx in tqdm(range(start_idx, len(dataset)), initial=start_idx,
                         total=len(dataset), desc="Type2"):
             row = dataset[idx]
+            # Skip rows where results is a plain string — nothing to delete
+            try:
+                _parsed = json.loads(row["tool_response"])
+                _results = _parsed.get("results", _parsed)
+                if isinstance(_results, str):
+                    skipped += 1
+                    continue
+            except Exception:
+                skipped += 1
+                continue
             try:
                 reduced_tr, deleted_paths, spans, deletion_target = self.type2_delete(
                     tool_response=row["tool_response"],
@@ -682,6 +719,9 @@ class SinglehopMixin:
                 json.dump(generated, f, ensure_ascii=False, indent=2)
 
         print(f"Done: {len(generated)} rows saved to {output_path}, {skipped} skipped")
+        csv = self._save_ragtruth_alongside(output_path)
+        if csv:
+            print(f"      RAGTruth JSONL: {csv}")
         return generated
 
     def generate_type3_dataset(self, client, model: str, dataset: list,
@@ -747,6 +787,9 @@ class SinglehopMixin:
                 json.dump(generated, f, ensure_ascii=False, indent=2)
 
         print(f"Done: {len(generated)} rows saved to {output_path}, {skipped} skipped")
+        csv = self._save_ragtruth_alongside(output_path)
+        if csv:
+            print(f"      RAGTruth JSONL: {csv}")
         return generated
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -820,6 +863,9 @@ class SinglehopMixin:
 
         pbar.close()
         print(f"Done: {len(generated)} rows saved to {output_path}, {skipped} skipped")
+        csv = self._save_ragtruth_alongside(output_path)
+        if csv:
+            print(f"      RAGTruth JSONL: {csv}")
         return generated
 
     async def _type3_single(self, client, model, row, temperature, max_tokens, max_retries):
@@ -895,6 +941,9 @@ class SinglehopMixin:
 
         pbar.close()
         print(f"Done: {len(generated)} rows saved to {output_path}, {skipped} skipped")
+        csv = self._save_ragtruth_alongside(output_path)
+        if csv:
+            print(f"      RAGTruth JSONL: {csv}")
         return generated
 
 
