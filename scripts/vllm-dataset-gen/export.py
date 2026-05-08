@@ -154,7 +154,13 @@ class ExportMixin:
         }
 
     def _ragtruth_labels_type1(self, item: dict, clean_output: str) -> tuple:
-        """Extract RAGTruth labels from Type 1 eval_spans (schema corruption)."""
+        """Extract RAGTruth labels from Type 1 eval_spans (schema corruption).
+
+        If no explicit (start>=0) span can be found by direct text search,
+        falls back to detect_type1_spans which marks the whole answer as an
+        implicit hallucination (model used corrupted data without quoting it).
+        Implicit cases are kept rather than dropped — they're valid signal.
+        """
         labels = []
         for span in item.get("eval_spans", []):
             if span.get("implicit_true") or span.get("due_to_null"):
@@ -175,11 +181,42 @@ class ExportMixin:
                 implicit_true=span.get("implicit_true", False),
                 due_to_null=span.get("due_to_null", False),
             ))
+
+        # Fall back to detect_type1_spans (4-tier with implicit fallback) when
+        # no label has a valid offset.  The fallback returns its own `plain`
+        # text whose offsets the new labels are aligned to — return it so the
+        # caller can use it as `output` (avoids _strip_tags vs _span_parse_tags drift).
+        plain_override = None
+        if not any(L["start"] >= 0 for L in labels):
+            try:
+                spans, plain = self.detect_type1_spans(item)
+                if spans:
+                    plain_override = plain
+                    labels = [
+                        {
+                            "start": s["start"],
+                            "end":   s["end"],
+                            "text":  s["text"],
+                            "meta":  s.get("meta", ""),
+                            "label_type":    s.get("label_type", "Evident Conflict"),
+                            "implicit_true": s.get("implicit_true", False),
+                            "due_to_null":   s.get("due_to_null", False),
+                        }
+                        for s in spans
+                    ]
+            except Exception:
+                pass
         summary = item.get("eval_summary", {"evident_conflict": 0, "baseless_info": 0})
-        return labels, summary
+        return labels, summary, plain_override
 
     def _ragtruth_labels_type2(self, item: dict, clean_output: str) -> tuple:
-        """Extract RAGTruth labels from Type 2 hallucination_spans (deletion)."""
+        """Extract RAGTruth labels from Type 2 hallucination_spans (deletion).
+
+        If hallucination_spans is empty or no offsets land in clean_output,
+        falls back to detect_type2_spans (4-tier with implicit fallback) so
+        rows where the answer over-generates without quoting deleted data are
+        still kept.
+        """
         labels = []
         evident_conflict = baseless_info = 0
         for span in item.get("hallucination_spans", []):
@@ -195,10 +232,40 @@ class ExportMixin:
                 evident_conflict += 1
             elif label_type == "Baseless Info":
                 baseless_info += 1
-        return labels, {"evident_conflict": evident_conflict, "baseless_info": baseless_info}
+
+        # Fall back to detect_type2_spans when no valid offset was found
+        plain_override = None
+        if not any(L["start"] >= 0 for L in labels):
+            try:
+                spans, plain = self.detect_type2_spans(item)
+                if spans:
+                    plain_override = plain
+                    labels = [
+                        {
+                            "start": s["start"],
+                            "end":   s["end"],
+                            "text":  s["text"],
+                            "meta":  s.get("meta", ""),
+                            "label_type":    s.get("label_type", "Evident Baseless Info"),
+                            "implicit_true": s.get("implicit_true", False),
+                            "due_to_null":   s.get("due_to_null", True),
+                        }
+                        for s in spans
+                    ]
+                    baseless_info = sum(1 for s in spans
+                                        if s.get("label_type") == "Evident Baseless Info")
+            except Exception:
+                pass
+        return (labels,
+                {"evident_conflict": evident_conflict, "baseless_info": baseless_info},
+                plain_override)
 
     def _ragtruth_labels_type3(self, item: dict, clean_output: str) -> tuple:
-        """Extract RAGTruth labels from Type 3 (tool overgeneration)."""
+        """Extract RAGTruth labels from Type 3 (tool overgeneration).
+
+        Returns (labels, summary, plain_override). plain_override is always None
+        for type3 — overgenerated_answer is already the canonical output text.
+        """
         comment = item.get("overgeneration_comment", "")
         labels = []
         if comment:
@@ -212,7 +279,7 @@ class ExportMixin:
             "evident_conflict": 0,
             "baseless_info": 0,
             "overgeneration": 1 if comment else 0,
-        }
+        }, None
 
     # ── Row converter ─────────────────────────────────────────────────────────
 
@@ -341,16 +408,24 @@ class ExportMixin:
 
         if is_type1:
             context = item.get("hallucinated_tool_response", item.get("tool_response", ""))
-            labels, summary = self._ragtruth_labels_type1(item, clean_output)
+            labels, summary, plain_override = self._ragtruth_labels_type1(item, clean_output)
         elif h_type == "type2_deletion":
-            context = item.get("tool_response", "")
-            labels, summary = self._ragtruth_labels_type2(item, clean_output)
+            # Use reduced_tool_response (after deletion) so the answer's
+            # references to deleted fields are unsupported by the context
+            context = item.get("reduced_tool_response", item.get("tool_response", ""))
+            labels, summary, plain_override = self._ragtruth_labels_type2(item, clean_output)
         elif is_overgen:
             context = item.get("tool_response", "")
-            labels, summary = self._ragtruth_labels_type3(item, clean_output)
+            labels, summary, plain_override = self._ragtruth_labels_type3(item, clean_output)
         else:
             context = item.get("tool_response", "")
-            labels, summary = [], {"evident_conflict": 0, "baseless_info": 0}
+            labels, summary, plain_override = [], {"evident_conflict": 0, "baseless_info": 0}, None
+
+        # If the fallback used a different plain text (e.g. _span_parse_tags
+        # vs _strip_tags differs because of literal [BRACKET] strings in the
+        # answer), use that text so label offsets remain valid.
+        if plain_override is not None:
+            clean_output = plain_override
 
         user_prompt = item.get("user_prompt", "")
         parts = []
