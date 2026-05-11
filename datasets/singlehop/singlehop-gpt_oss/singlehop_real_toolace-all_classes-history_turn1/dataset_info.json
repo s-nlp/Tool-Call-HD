@@ -1,0 +1,72 @@
+{
+  "citation": "",
+  "description": "",
+  "features": {
+    "last_user_query": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "tool_response": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "data_spans": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "history": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "generated_answer": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "spans": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "class": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "id": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "system_prompt": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "original_answer": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "original_tool_response": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "full_history": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "omitted_items": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "full": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "tool_call": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "sample_id": {
+      "dtype": "string",
+      "_type": "Value"
+    }
+  },
+  "homepage": "",
+  "license": ""
+}
