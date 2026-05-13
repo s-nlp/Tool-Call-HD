@@ -182,12 +182,29 @@ class ExportMixin:
                 due_to_null=span.get("due_to_null", False),
             ))
 
+        # Drop invalid spans (-1,-1) produced when _find_in_output couldn't
+        # locate the original value in the answer (implicit hallucination).
+        labels = [L for L in labels if L["start"] >= 0]
+
+        # Drop false positives: span text exactly matches a leaf value in the
+        # corrupted context — the model quoted an unchanged field, no real conflict.
+        corrupted_ctx = item.get("hallucinated_tool_response", "")
+        if corrupted_ctx:
+            try:
+                hall_leaves = set(
+                    v.lower() for _, v in self._span_leaves(json.loads(corrupted_ctx))
+                    if len(v) > 2
+                )
+                labels = [L for L in labels
+                          if L.get("implicit_true")
+                          or L.get("text", "").lower() not in hall_leaves]
+            except Exception:
+                pass
+
         # Fall back to detect_type1_spans (4-tier with implicit fallback) when
-        # no label has a valid offset.  The fallback returns its own `plain`
-        # text whose offsets the new labels are aligned to — return it so the
-        # caller can use it as `output` (avoids _strip_tags vs _span_parse_tags drift).
+        # no valid label remains.
         plain_override = None
-        if not any(L["start"] >= 0 for L in labels):
+        if not labels:
             try:
                 spans, plain = self.detect_type1_spans(item)
                 if spans:
@@ -263,18 +280,34 @@ class ExportMixin:
     def _ragtruth_labels_type3(self, item: dict, clean_output: str) -> tuple:
         """Extract RAGTruth labels from Type 3 (tool overgeneration).
 
+        The structure is always: clean_output = original_answer + "\\n\\n" + comment
+        so the span is computed from the suffix — no text search needed.
+
         Returns (labels, summary, plain_override). plain_override is always None
         for type3 — overgenerated_answer is already the canonical output text.
         """
         comment = item.get("overgeneration_comment", "")
         labels = []
         if comment:
-            labels.append(self._ragtruth_label(
-                text=comment,
-                clean_output=clean_output,
-                label_type="Overgeneration",
-                meta=f"OVERGENERATION\n{comment}",
-            ))
+            end = len(clean_output)
+            start = end - len(comment)
+            if start < 0 or clean_output[start:] != comment:
+                # Fallback: last occurrence (handles minor whitespace drift)
+                idx = clean_output.rfind(comment)
+                if idx >= 0:
+                    start, end = idx, idx + len(comment)
+                else:
+                    start, end = -1, -1
+            if start >= 0:
+                labels.append({
+                    "start": start,
+                    "end": end,
+                    "text": comment,
+                    "meta": f"OVERGENERATION\n{comment}",
+                    "label_type": "Overgeneration",
+                    "implicit_true": False,
+                    "due_to_null": False,
+                })
         return labels, {
             "evident_conflict": 0,
             "baseless_info": 0,
@@ -339,7 +372,9 @@ class ExportMixin:
             "type2": "Evident Baseless Info",
             "type3": "Overgeneration",
         }
-        label_type = label_type_map.get(h_type, "Evident Conflict")
+        # Normalize: "type3_tool_overgen" → "type3", "type1_smart" → "type1", etc.
+        h_type_base = h_type.split("_")[0] if h_type else ""
+        label_type = label_type_map.get(h_type_base, label_type_map.get(h_type, "Evident Conflict"))
         labels = [
             {
                 "start": s,

@@ -262,7 +262,7 @@ class ShowcaseMixin:
         from hallucination_auto import HallucinationAuto
         ha = HallucinationAuto()
 
-        data = json.load(open("last dub/pruneddataset/pruned_type2.json"))
+        data = json.load(open("/pruneddataset/pruned_type2.json"))
         ha.show_samples(data, n=3)          # 3 random
         ha.show_samples(data, idx=7)        # specific index
         ha.show_samples(data, n=5, seed=99) # different random picks

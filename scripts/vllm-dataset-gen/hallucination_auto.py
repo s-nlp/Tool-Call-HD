@@ -27,7 +27,7 @@ Quick start:
     client = AsyncOpenAI(base_url="http://host:8000/v1", api_key="dummy")
 
     import asyncio, json
-    multistep = json.load(open("last dub/toolace_multistep_clean (1).json"))
+    multistep = json.load(open("last dub/toolace_multistep_clean.json"))
 
     # Pruning-based generation (all depths, all types):
     asyncio.run(ha.generate_pruned_multistep(

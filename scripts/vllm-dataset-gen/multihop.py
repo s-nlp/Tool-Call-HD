@@ -32,7 +32,7 @@ Usage (quick-start):
     client = AsyncOpenAI(base_url="http://host:8000/v1", api_key="dummy")
 
     import asyncio, json
-    multistep = json.load(open("last dub/toolace_multistep_clean (1).json"))
+    multistep = json.load(open("last dub/toolace_multistep_clean.json"))
 
     asyncio.run(ha.generate_pruned_multistep(
         client, "Qwen/Qwen2.5-14B-Instruct",
@@ -228,6 +228,10 @@ class MultihopMixin:
         Uses 4-tier strategy: tag-based → original text search → corrupted text
         search → implicit (whole answer).
 
+        False-positive filter: a span is only kept if its text does NOT appear
+        in the corrupted tool response — if it does, the model was correct to
+        quote that value (unchanged field) and marking it is a false positive.
+
         Returns (spans, plain_text).
         """
         if not item.get("tagged_answer"):
@@ -239,6 +243,17 @@ class MultihopMixin:
         matched = self._span_match_tags(tags, orig_leaves)
         spans, found = [], set()
 
+        # Build set of all string values in the CORRUPTED tool response
+        hall_values = set(
+            v.lower() for _, v in self._span_leaves(json.loads(item["hallucinated_tool_response"]))
+            if len(v) > 2
+        )
+
+        def _in_corrupted(text: str) -> bool:
+            """True if text also appears in the corrupted context → not a real conflict."""
+            t = text.lower()
+            return t in hall_values or any(t in v for v in hall_values)
+
         for m in matched:
             path = m.get("path")
             if not path or path not in changes:
@@ -249,6 +264,9 @@ class MultihopMixin:
             meta = f"{label.upper()}\nOriginal: {c['orig']}"
             if c["hall"]:
                 meta += f"\nGenerated: {c['hall']}"
+            # Skip if span text is unchanged (present in corrupted context too)
+            if _in_corrupted(m["value"]):
+                continue
             self._span_insert(spans, m["start"], m["end"], m["value"], meta, label, False, False)
 
         for path, c in changes.items():
@@ -258,13 +276,13 @@ class MultihopMixin:
             meta_base = f"{label.upper()}\nOriginal: {c['orig']}"
             if c["hall"]:
                 meta_base += f"\nGenerated: {c['hall']}"
-            if c["orig"] and len(c["orig"]) > 1:
+            if c["orig"] and len(c["orig"]) > 1 and not _in_corrupted(c["orig"]):
                 idx = plain.find(c["orig"])
                 if idx >= 0 and self._span_insert(spans, idx, idx + len(c["orig"]),
                                                    c["orig"], meta_base, label, False, False):
                     found.add(path)
                     continue
-            if c["hall"] and len(c["hall"]) > 1:
+            if c["hall"] and len(c["hall"]) > 1 and not _in_corrupted(c["hall"]):
                 idx = plain.find(c["hall"])
                 if idx >= 0 and self._span_insert(spans, idx, idx + len(c["hall"]),
                                                    c["hall"], meta_base, label, False, False):
@@ -283,11 +301,34 @@ class MultihopMixin:
         spans.sort(key=lambda s: s["start"])
         return spans, plain
 
+    @staticmethod
+    def _expand_to_line(plain: str, start: int, end: int) -> tuple:
+        """Expand a span to cover the full line(s) it sits in."""
+        s = plain.rfind("\n", 0, start)
+        s = 0 if s < 0 else s + 1
+        e = plain.find("\n", end)
+        e = len(plain) if e < 0 else e
+        return s, e
+
+    @staticmethod
+    def _find_all(text: str, val: str) -> list:
+        """Return all start indices of val in text."""
+        idx, positions = 0, []
+        while True:
+            i = text.find(val, idx)
+            if i < 0:
+                break
+            positions.append(i)
+            idx = i + 1
+        return positions
+
     def detect_type2_spans(self, item: dict) -> tuple:
         """Find char-level hallucinated spans for a Type-2 (deletion) item.
 
-        Uses 4-tier strategy: tag-match → original value text search → JSON
-        leaf text search → implicit (whole answer).
+        Improvements over v1:
+        - Finds ALL occurrences of each deleted value (not just first)
+        - Expands each span to the full containing line for better context
+        - Falls back through tag-match → text search → implicit
 
         Returns (spans, plain_text).
         """
@@ -295,7 +336,7 @@ class MultihopMixin:
             item = self._tag_row(item)
         tags, plain = self._span_parse_tags(item["tagged_answer"])
         hall_spans = item.get("hallucination_spans", [])
-        del_paths = item.get("deleted_paths", [])
+        del_paths  = item.get("deleted_paths", [])
         spans: list = []
         found_paths: set = set()
 
@@ -303,11 +344,22 @@ class MultihopMixin:
         for t in tags:
             tag_map.setdefault(t["key"], []).append(t)
 
+        def _add_all_occurrences(val, meta, path):
+            """Find every occurrence of val in plain, expand to line, insert."""
+            added = False
+            for idx in self._find_all(plain, val):
+                s, e = self._expand_to_line(plain, idx, idx + len(val))
+                text = plain[s:e]
+                if self._span_insert(spans, s, e, text, meta, "Evident Baseless Info", False, True):
+                    added = True
+            return added
+
         for hs in hall_spans:
             tag_name = hs["tag"]
             orig_val = str(hs["original_value"])
             meta = ("EVIDENT BASELESS INFO\nPath (deleted): " + hs["path"]
                     + "\nOriginal value: " + orig_val)
+            # Tag-based match
             hit = None
             for t in tag_map.get(tag_name, []):
                 if t["value"] == orig_val or orig_val in t["value"] or t["value"] in orig_val:
@@ -316,15 +368,13 @@ class MultihopMixin:
             if hit is None and tag_map.get(tag_name):
                 hit = tag_map[tag_name][0]
             if hit:
-                if self._span_insert(spans, hit["start"], hit["end"], hit["value"],
-                                     meta, "Evident Baseless Info", False, True):
+                s, e = self._expand_to_line(plain, hit["start"], hit["end"])
+                if self._span_insert(spans, s, e, plain[s:e], meta, "Evident Baseless Info", False, True):
                     found_paths.add(hs["path"])
                 continue
-            if len(orig_val) > 1:
-                idx = plain.find(orig_val)
-                if idx >= 0 and self._span_insert(spans, idx, idx + len(orig_val),
-                                                   orig_val, meta, "Evident Baseless Info", False, True):
-                    found_paths.add(hs["path"])
+            # Text search — all occurrences
+            if len(orig_val) > 1 and _add_all_occurrences(orig_val, meta, hs["path"]):
+                found_paths.add(hs["path"])
 
         if del_paths:
             orig_data = json.loads(item["tool_response"])
@@ -337,11 +387,9 @@ class MultihopMixin:
                     continue
                 if len(val) <= 1:
                     continue
-                idx = plain.find(val)
                 meta = ("EVIDENT BASELESS INFO\nPath (deleted): " + path
                         + "\nOriginal value: " + val)
-                if idx >= 0 and self._span_insert(spans, idx, idx + len(val),
-                                                   val, meta, "Evident Baseless Info", False, True):
+                if _add_all_occurrences(val, meta, path):
                     found_paths.add(path)
 
         if not spans and del_paths and plain.strip():
@@ -350,25 +398,47 @@ class MultihopMixin:
             self._span_insert(spans, 0, len(plain), plain, meta, "Evident Baseless Info", True, True)
 
         spans.sort(key=lambda s: s["start"])
+
+        # Merge adjacent spans (same deleted block, consecutive lines)
+        if len(spans) > 1:
+            merged = [spans[0]]
+            for sp in spans[1:]:
+                prev = merged[-1]
+                gap = plain[prev["end"]:sp["start"]]
+                if not sp.get("implicit_true") and not prev.get("implicit_true") and gap.strip() == "":
+                    prev["end"]  = sp["end"]
+                    prev["text"] = plain[prev["start"]:prev["end"]]
+                else:
+                    merged.append(sp)
+            spans = merged
+
         return spans, plain
 
     def detect_type3_spans(self, item: dict) -> tuple:
         """Find the hallucinated span for a Type-3 (overgeneration) item.
 
-        Trivially locates the overgeneration_comment in overgenerated_answer.
+        The structure is always: overgenerated_answer = original_answer + "\\n\\n" + comment
+        so the span is always at the end — no text search needed.
         Returns (spans, plain_text).
         """
         overgen = item["overgenerated_answer"]
         comment = item["overgeneration_comment"]
         used = item.get("used_tool", "?")
-        idx = overgen.find(comment)
-        if idx < 0:
+        if not comment:
             return [], overgen
+        end = len(overgen)
+        start = end - len(comment)
+        if start < 0 or overgen[start:] != comment:
+            # Fallback: last occurrence search (handles minor whitespace drift)
+            idx = overgen.rfind(comment)
+            if idx < 0:
+                return [], overgen
+            start, end = idx, idx + len(comment)
         meta = ("EVIDENT BASELESS INFO\n"
                 "Overgenerated sentence referencing tool(s) not used in this dialogue.\n"
                 "Used tool: " + str(used))
         return [{
-            "start": idx, "end": idx + len(comment), "text": comment,
+            "start": start, "end": end, "text": comment,
             "meta": meta, "label_type": "Evident Baseless Info",
             "implicit_true": False, "due_to_null": False,
         }], overgen
@@ -595,6 +665,11 @@ class MultihopMixin:
         Returns the row enriched with hallucinated_tool_response,
         hallucination_labels, plain_answer; or None on failure.
         """
+        try:
+            json.loads(row["tool_response"])
+        except (json.JSONDecodeError, KeyError):
+            return None
+
         for attempt in range(max_retries):
             try:
                 hall_dict, target, unlocked_paths = await self.type1_api_async(
@@ -620,6 +695,8 @@ class MultihopMixin:
                     "eval_summary": summary,
                 }
                 spans_labelled, plain = self.detect_type1_spans(enriched)
+                if self._is_whole_answer_span(spans_labelled, plain):
+                    continue  # string-leaf noise — retry won't help, but keeps loop clean
                 enriched["hallucination_labels"] = spans_labelled
                 enriched["plain_answer"] = plain
                 return enriched
@@ -662,7 +739,8 @@ class MultihopMixin:
         Calls type3_api_async (from SinglehopMixin) with retries.
         If the row has no 'system' field, one is synthesised automatically
         from the row's own tool_call before calling the API.
-        Returns enriched row or None on failure.
+        The LLM must output ONLY the new sentence (prompt enforces this).
+        Returns enriched row or None on failure / empty extension.
         """
         if not row.get("system"):
             row = self.add_missing_system([row])[0]
@@ -678,6 +756,7 @@ class MultihopMixin:
                     system_tools=row["system"],
                     tool_call=row["tool_call"],
                 )
+                comment = comment.strip()
                 if not comment:
                     continue
                 enriched = {
@@ -702,6 +781,7 @@ class MultihopMixin:
         multistep: list,
         output_dir: str,
         batch_size: int = 5,
+        types: list = None,
     ) -> tuple:
         """Pruning-based generation: hallucinated multistep samples at every depth.
 
@@ -726,6 +806,7 @@ class MultihopMixin:
         Output files saved to output_dir:
           pruned_type1.json, pruned_type2.json, pruned_type3.json
         """
+        types = [str(t) for t in (types or ["1", "2", "3"])]
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
 
@@ -763,51 +844,55 @@ class MultihopMixin:
             batch = work_items[batch_start:batch_start + batch_size]
 
             # ── Type 2: synchronous, no LLM ──────────────────────────────────
-            for dlg, turn_k in batch:
-                row = self.extract_turn_as_row(dlg, turn_k)
-                pruned = self.prune_dialogue(dlg, turn_k)
-                t2_row = self.generate_type2_for_row(row)
-                if t2_row:
-                    injected = self.inject_row_into_pruned(pruned, t2_row, "type2")
-                    injected["_pruning_depth"] = turn_k + 1
-                    injected["_dialogue_id"] = dlg["analysis"].get("dialogue_id", "")
-                    all_type2.append(injected)
+            if "2" in types:
+                for dlg, turn_k in batch:
+                    row = self.extract_turn_as_row(dlg, turn_k)
+                    pruned = self.prune_dialogue(dlg, turn_k)
+                    t2_row = self.generate_type2_for_row(row)
+                    if t2_row:
+                        injected = self.inject_row_into_pruned(pruned, t2_row, "type2")
+                        injected["_pruning_depth"] = turn_k + 1
+                        injected["_dialogue_id"] = dlg["analysis"].get("dialogue_id", "")
+                        all_type2.append(injected)
 
             # ── Type 1: async, LLM ───────────────────────────────────────────
-            t1_tasks = [
-                self.generate_type1_for_row(client, model, self.extract_turn_as_row(dlg, turn_k))
-                for dlg, turn_k in batch
-            ]
-            t1_results = await asyncio.gather(*t1_tasks)
-            for (dlg, turn_k), t1_row in zip(batch, t1_results):
-                if t1_row:
-                    pruned = self.prune_dialogue(dlg, turn_k)
-                    injected = self.inject_row_into_pruned(pruned, t1_row, "type1")
-                    injected["_pruning_depth"] = turn_k + 1
-                    injected["_dialogue_id"] = dlg["analysis"].get("dialogue_id", "")
-                    all_type1.append(injected)
+            if "1" in types:
+                t1_tasks = [
+                    self.generate_type1_for_row(client, model, self.extract_turn_as_row(dlg, turn_k))
+                    for dlg, turn_k in batch
+                ]
+                t1_results = await asyncio.gather(*t1_tasks)
+                for (dlg, turn_k), t1_row in zip(batch, t1_results):
+                    if t1_row:
+                        pruned = self.prune_dialogue(dlg, turn_k)
+                        injected = self.inject_row_into_pruned(pruned, t1_row, "type1")
+                        injected["_pruning_depth"] = turn_k + 1
+                        injected["_dialogue_id"] = dlg["analysis"].get("dialogue_id", "")
+                        all_type1.append(injected)
 
             # ── Type 3: async, LLM ───────────────────────────────────────────
-            t3_tasks = [
-                self.generate_type3_for_row(client, model, self.extract_turn_as_row(dlg, turn_k))
-                for dlg, turn_k in batch
-            ]
-            t3_results = await asyncio.gather(*t3_tasks)
-            for (dlg, turn_k), t3_row in zip(batch, t3_results):
-                if t3_row:
-                    pruned = self.prune_dialogue(dlg, turn_k)
-                    injected = self.inject_row_into_pruned(pruned, t3_row, "type3")
-                    injected["_pruning_depth"] = turn_k + 1
-                    injected["_dialogue_id"] = dlg["analysis"].get("dialogue_id", "")
-                    all_type3.append(injected)
+            if "3" in types:
+                t3_tasks = [
+                    self.generate_type3_for_row(client, model, self.extract_turn_as_row(dlg, turn_k))
+                    for dlg, turn_k in batch
+                ]
+                t3_results = await asyncio.gather(*t3_tasks)
+                for (dlg, turn_k), t3_row in zip(batch, t3_results):
+                    if t3_row:
+                        pruned = self.prune_dialogue(dlg, turn_k)
+                        injected = self.inject_row_into_pruned(pruned, t3_row, "type3")
+                        injected["_pruning_depth"] = turn_k + 1
+                        injected["_dialogue_id"] = dlg["analysis"].get("dialogue_id", "")
+                        all_type3.append(injected)
 
             # Save after every batch (incremental / resumable)
             processed += len(batch)
-            for lst, fname in [(all_type1, "pruned_type1.json"),
-                               (all_type2, "pruned_type2.json"),
-                               (all_type3, "pruned_type3.json")]:
-                with open(out / fname, "w") as f:
-                    json.dump(lst, f, ensure_ascii=False, indent=2)
+            for lst, fname, t in [(all_type1, "pruned_type1.json", "1"),
+                                   (all_type2, "pruned_type2.json", "2"),
+                                   (all_type3, "pruned_type3.json", "3")]:
+                if t in types:
+                    with open(out / fname, "w") as f:
+                        json.dump(lst, f, ensure_ascii=False, indent=2)
 
             print(f"  Batch {batch_start // batch_size + 1}: "
                   f"{processed}/{len(work_items)} pairs done | "

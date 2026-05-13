@@ -36,6 +36,15 @@ from tqdm.auto import tqdm
 
 class SinglehopMixin:
 
+    @staticmethod
+    def _is_whole_answer_span(spans: list, plain: str) -> bool:
+        """True if every explicit span covers the entire answer (string-leaf noise)."""
+        explicit = [s for s in spans if not s.get("implicit_true")]
+        return bool(explicit) and all(
+            s.get("start", -1) == 0 and s.get("end", -1) == len(plain)
+            for s in explicit
+        )
+
     def _save_ragtruth_alongside(self, json_path: str) -> str:
         """After saving the rich JSON to *json_path*, also save a RAGTruth-format
         JSONL next to it (same stem, .jsonl extension).
@@ -67,16 +76,18 @@ class SinglehopMixin:
     TYPE3_SYSTEM_PROMPT = (
         "You will see a user query and the original answer produced by a tool-calling assistant. "
         "The assistant had access ONLY to the following tools:\n\n{tools}\n\n"
-        "Your task is to add exactly one short, natural-sounding sentence at the end of the answer. "
-        "This sentence must subtly reference a capability or data that belongs to one of the OTHER "
-        "tools listed above (not the tool already used), BUT:\n"
+        "Your task: output EXACTLY ONE short, natural-sounding sentence that subtly references "
+        "a capability or data belonging to one of the OTHER tools listed above (not the tool "
+        "already used).\n\n"
+        "STRICT RULES:\n"
+        "- Output ONLY the new sentence. Do NOT repeat or include the original answer.\n"
         "- Do NOT name the tool.\n"
         "- Do NOT tell the user to 'use' or 'try' anything.\n"
-        "- Instead, present the information as if it were a natural continuation — "
-        "e.g. 'Historical price trends are also available for these indexes' or "
-        "'Detailed nutritional breakdowns can be retrieved for each item'.\n"
+        "- Present it as a natural continuation — e.g. 'Historical price trends are also available "
+        "for these indexes' or 'Detailed nutritional breakdowns can be retrieved for each item'.\n"
         "- The sentence should sound like a helpful factual remark, not an explicit recommendation.\n"
-        "- Keep it brief (one sentence). Do NOT invent capabilities not covered by the listed tools."
+        "- Keep it brief (one sentence). Do NOT invent capabilities not covered by the listed tools.\n"
+        "- Your entire response must be this one sentence and nothing else."
     )
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -292,7 +303,7 @@ class SinglehopMixin:
 
     def type1_api(self, client, model: str, tool_response: str, user_prompt: str,
                   howhow: Literal["smart", "dumb"] = "smart",
-                  temperature: float = 0.8, max_tokens: int = 2048,
+                  temperature: float = 0.8, max_tokens: int = 512,
                   system_prompt=None):
         """Generate a hallucinated tool response via vLLM guided JSON decoding.
 
@@ -327,7 +338,7 @@ class SinglehopMixin:
     async def type1_api_async(self, client, model: str, tool_response: str,
                               user_prompt: str,
                               howhow: Literal["smart", "dumb"] = "smart",
-                              temperature: float = 0.8, max_tokens: int = 2048,
+                              temperature: float = 0.8, max_tokens: int = 512,
                               system_prompt=None):
         """Async version of type1_api (requires AsyncOpenAI client)."""
         sys_prompt = system_prompt or self.TYPE1_SYSTEM_PROMPT
@@ -413,9 +424,10 @@ class SinglehopMixin:
         return params
 
     @staticmethod
-    def _filter_system_tools(system_prompt: str, exclude_tool: str) -> str:
+    def _filter_system_tools(system_prompt: str, exclude_tool: str,
+                              max_tools: int = 8) -> str:
         """Remove the used tool from the system prompt's tool list.
-        The LLM then can only reference OTHER tools in its overgeneration.
+        Caps the result at max_tools to keep the prompt within context limits.
         """
         m = re.search(r'(\[\s*\{.*\}\s*\])', system_prompt, re.DOTALL)
         if not m:
@@ -423,7 +435,12 @@ class SinglehopMixin:
         try:
             tools = json.loads(m.group(1))
             filtered = [t for t in tools if t.get("name", "") != exclude_tool]
-            return json.dumps(filtered or tools, indent=2)
+            if not filtered:
+                filtered = tools
+            # Cap to avoid blowing context window when registry is large
+            if len(filtered) > max_tools:
+                filtered = random.sample(filtered, max_tools)
+            return json.dumps(filtered, indent=2)
         except json.JSONDecodeError:
             return m.group(1)
 
@@ -596,7 +613,7 @@ class SinglehopMixin:
     def generate_type1_dataset(self, client, model: str, dataset: list,
                                output_path: str,
                                howhow: Literal["smart", "dumb"] = "smart",
-                               temperature: float = 0.8, max_tokens: int = 4096,
+                               temperature: float = 0.8, max_tokens: int = 512,
                                max_retries: int = 3) -> list:
         """Generate Type 1 hallucinations for an entire dataset (sync, resumable).
 
@@ -766,6 +783,7 @@ class SinglehopMixin:
                         tool_call=row["tool_call"],
                         temperature=temperature, max_tokens=max_tokens,
                     )
+                    comment = comment.strip()
                     if comment:
                         generated.append({
                             **row,
@@ -798,7 +816,19 @@ class SinglehopMixin:
 
     async def _type1_single(self, client, model, row, howhow, temperature,
                             max_tokens, max_retries):
-        """Process one row for async Type 1 generation. Returns row dict or None."""
+        """Process one row for async Type 1 generation. Returns row dict or None.
+        Retries on no-op (LLM returned same values, no actual hallucination).
+        """
+        try:
+            tr_parsed = json.loads(row["tool_response"])
+        except (json.JSONDecodeError, KeyError):
+            return None
+
+        # String-leaf: results is a plain string → will always produce a whole-answer span
+        results = tr_parsed.get("results", tr_parsed)
+        if isinstance(results, str):
+            return None
+
         for attempt in range(max_retries):
             try:
                 hall_dict, target, unlocked_paths = await self.type1_api_async(
@@ -811,6 +841,11 @@ class SinglehopMixin:
                 spans, summary = self.evaluate_hallucination(
                     original_data, hall_dict, unlocked_paths
                 )
+                if not spans:
+                    if attempt == max_retries - 1:
+                        print(f"  [type1 row] no spans after {max_retries} attempts "
+                              f"(LLM returned same values) — target={target}")
+                    continue
                 return {
                     **row,
                     "hallucinated_tool_response": json.dumps(hall_dict, ensure_ascii=False),
@@ -820,14 +855,16 @@ class SinglehopMixin:
                     "eval_spans": spans,
                     "eval_summary": summary,
                 }
-            except Exception:
+            except Exception as _e:
+                if attempt == 0:
+                    print(f"  [type1 row] error: {type(_e).__name__}: {_e}")
                 continue
         return None
 
     async def generate_type1_dataset_async(self, client, model: str, dataset: list,
                                            output_path: str,
                                            howhow: Literal["smart", "dumb"] = "smart",
-                                           temperature: float = 0.8, max_tokens: int = 4096,
+                                           temperature: float = 0.8, max_tokens: int = 512,
                                            max_retries: int = 3, batch_size: int = 10) -> list:
         """Async batched Type 1 generation (batch_size rows processed concurrently).
 
@@ -884,6 +921,7 @@ class SinglehopMixin:
                     temperature=temperature,
                     max_tokens=max_tokens,
                 )
+                comment = comment.strip()
                 if comment:
                     return {
                         **row,
@@ -892,7 +930,9 @@ class SinglehopMixin:
                         "hallucination_type": "type3_tool_overgen",
                         "used_tool": self._get_used_tool_name(row["tool_call"]),
                     }
-            except Exception:
+            except Exception as _e:
+                if attempt == 0:
+                    print(f"  [type3 row] error: {type(_e).__name__}: {_e}")
                 continue
         return None
 
