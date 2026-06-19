@@ -32,7 +32,7 @@ This removes only trailing assistant follow-up / CTA text such as:
 - `Let me know if you need ...`
 - `Feel free to ask ...`
 
-- ## 3. Run LettuceDetect on the ToolHACE
+## 3. Run LettuceDetect on the ToolHACE
 
 ### Installation
 
