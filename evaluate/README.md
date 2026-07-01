@@ -1,5 +1,25 @@
 # How to RUN
 
+## Evaluate the best released ToolHACE model
+
+```bash
+python evaluate/evaluate_save.py \
+  --model s-nlp/tool-calling-hallucination-modernbert-base-unified-final \
+  --hf-dataset s-nlp/toolace-unified-hallucinations \
+  --hf-split test \
+  --save-preds evaluate/results/toolhace_modernbert_base_test_predictions.jsonl \
+  --by-type
+```
+
+This script computes:
+
+- response-level binary hallucination metrics
+- character-level span metrics
+- span-level overlap metrics
+- 5-class type reports
+
+It also saves per-row predictions so new metrics can be recomputed without rerunning inference.
+
 Чтобы запустить:
 ```bash
 python3 evaluate/evaluate_lettuce_metrics.py \

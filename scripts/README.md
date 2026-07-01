@@ -37,7 +37,22 @@ This removes only trailing assistant follow-up / CTA text such as:
 ### Installation
 
 ```bash
-pip install lettucedetect>=0.1.8 tqdm torch
+pip install lettucedetect>=0.1.8 datasets transformers torch tqdm pandas
+```
+
+### Best released ToolHACE checkpoint
+
+- [`s-nlp/tool-calling-hallucination-modernbert-base-unified-final`](https://huggingface.co/s-nlp/tool-calling-hallucination-modernbert-base-unified-final)
+
+### Prepare ToolHACE rows for span inference
+
+`run_lettuce_detector.py` expects flat JSONL with `query`, `context`, and `output`. Convert the unified ToolHACE rows first:
+
+```bash
+python prepare_lettuce_detector_input.py \
+  --hf-dataset s-nlp/toolace-unified-hallucinations \
+  --hf-split test \
+  --output ../data/toolhace_test_for_lettuce.jsonl
 ```
 
 ### Input format
@@ -60,9 +75,9 @@ Example line:
 ```bash
 python run_lettuce_detector.py \
     --method lettucedetect \
-    --checkpoint KRLabsOrg/lettucedect-large-modernbert-en-v1 \
-    --data path/to/data.jsonl \
-    --output path/to/predictions.jsonl
+    --checkpoint s-nlp/tool-calling-hallucination-modernbert-base-unified-final \
+    --data ../data/toolhace_test_for_lettuce.jsonl \
+    --output ../predictions/toolhace_modernbert_base_unified_final.jsonl
 ```
 
 ### Options
@@ -91,10 +106,35 @@ Each output line is the input object extended with a `pred` field — a list of 
 
 ### Examples
 
-Run with the large LettuceDetect model:
+Run with the best ToolHACE checkpoint:
 ```bash
 python run_lettuce_detector.py \
     --method lettucedetect \
-    --checkpoint KRLabsOrg/lettucedect-large-modernbert-en-v1 \
-    --data data.jsonl
+    --checkpoint s-nlp/tool-calling-hallucination-modernbert-base-unified-final \
+    --data ../data/toolhace_test_for_lettuce.jsonl
+```
+
+### Train a ToolHACE model
+
+```bash
+python train_toolhace_lettuce.py \
+  --hf-dataset s-nlp/toolace-unified-hallucinations \
+  --hf-train-split train \
+  --hf-dev-split dev \
+  --model-name answerdotai/ModernBERT-base \
+  --output-dir ../outputs/toolhace_modernbert_base \
+  --batch-size 4 \
+  --epochs 6 \
+  --learning-rate 1e-5 \
+  --grad-accum 8
+```
+
+If you have local labeled files instead of the HF dataset:
+
+```bash
+python train_toolhace_lettuce.py \
+  --train-input /path/to/train.json \
+  --dev-input /path/to/dev.json \
+  --model-name answerdotai/ModernBERT-base \
+  --output-dir ../outputs/toolhace_modernbert_base
 ```
