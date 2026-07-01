@@ -36,6 +36,75 @@ Together these results highlight the need for dedicated benchmarks and models fo
 
 This repository hosts code and resources for the ToolHACE benchmark. Dataset files, data-generation pipelines, and evaluation scripts will be added here. Contributions and issues are welcome.
 
+## Best Released ToolHACE Model
+
+Our best released LettuceDetect-style checkpoint is:
+
+- [`s-nlp/tool-calling-hallucination-modernbert-base-unified-final`](https://huggingface.co/s-nlp/tool-calling-hallucination-modernbert-base-unified-final)
+
+The unified ToolHACE evaluation scripts in this repository default to the Hugging Face dataset:
+
+- `s-nlp/toolace-unified-hallucinations`
+
+## Run The Best Model
+
+Install the core dependencies:
+
+```bash
+pip install lettucedetect>=0.1.8 datasets transformers torch tqdm pandas
+```
+
+Convert ToolHACE unified rows into the `query/context/output` JSONL format expected by `scripts/run_lettuce_detector.py`:
+
+```bash
+python scripts/prepare_lettuce_detector_input.py \
+  --hf-dataset s-nlp/toolace-unified-hallucinations \
+  --hf-split test \
+  --output data/toolhace_test_for_lettuce.jsonl
+```
+
+Then run the best released checkpoint:
+
+```bash
+python scripts/run_lettuce_detector.py \
+  --method lettucedetect \
+  --checkpoint s-nlp/tool-calling-hallucination-modernbert-base-unified-final \
+  --data data/toolhace_test_for_lettuce.jsonl \
+  --output predictions/toolhace_modernbert_base_unified_final.jsonl
+```
+
+## Train On ToolHACE
+
+To train a ModernBERT-based detector on labeled ToolHACE unified rows:
+
+```bash
+python scripts/train_toolhace_lettuce.py \
+  --hf-dataset s-nlp/toolace-unified-hallucinations \
+  --hf-train-split train \
+  --hf-dev-split dev \
+  --model-name answerdotai/ModernBERT-base \
+  --output-dir outputs/toolhace_modernbert_base \
+  --batch-size 4 \
+  --epochs 6 \
+  --learning-rate 1e-5 \
+  --grad-accum 8
+```
+
+If you already have local train/dev files, replace the HF arguments with `--train-input ... --dev-input ...`.
+
+## Evaluate A Checkpoint
+
+To compute response-level, character-level, span-level, and by-type metrics while saving rich per-row predictions:
+
+```bash
+python evaluate/evaluate_save.py \
+  --model s-nlp/tool-calling-hallucination-modernbert-base-unified-final \
+  --hf-dataset s-nlp/toolace-unified-hallucinations \
+  --hf-split test \
+  --save-preds evaluate/results/toolhace_modernbert_base_test_predictions.jsonl \
+  --by-type
+```
+
 ## Citation
 
 If you use ToolHACE in your work, please cite the paper:
