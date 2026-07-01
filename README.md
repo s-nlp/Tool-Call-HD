@@ -1,8 +1,6 @@
-# ToolHACE
-
 **A Dataset for Detecting Hallucinations in Tool-Based LLM Responses**
 
-ToolHACE is a span-level benchmark for **hallucination detection in tool-augmented LLM responses**. It targets a stage of the tool-use pipeline that existing benchmarks largely overlook: the *post-tool-call response generation* step, where a model can still go wrong even after the correct tool has been called and accurate information has been returned.
+ToolHACE is a span-level benchmark for **hallucination detection in tool-augmented LLM responses**. It targets a stage of the tool-use pipeline that existing benchmarks largely overlook: the *post-tool-call response generation* step, where a model can still go wrong even after the correct tool has been called and accurate information has been returned. This repository hosts code and resources for the this benchmark. Dataset files, data-generation pipelines, and evaluation scripts will be added here.
 
 ---
 
@@ -22,7 +20,7 @@ Most hallucination benchmarks for tool-augmented dialogue focus on the **tool-ca
 - **Five fine-grained hallucination categories.** Each problematic span is assigned to one of five categories capturing distinct ways a post-tool-call response can deviate from its grounding evidence.
 - **Tool-augmented context.** Each example pairs a model response with the tool calls and tool outputs it was meant to be grounded in, so detectors can reason about the response *relative to* the available evidence.
 
-## Key Findings from the Paper
+## Key Findings
 
 Through extensive experiments with modern hallucination detectors, the ToolHACE study shows that:
 
@@ -31,10 +29,6 @@ Through extensive experiments with modern hallucination detectors, the ToolHACE 
 3. **Transfer from tool-agnostic hallucination datasets performs poorly** in this setting, underscoring that general-purpose hallucination detection does not carry over to tool-augmented responses.
 
 Together these results highlight the need for dedicated benchmarks and models for reliable hallucination detection in tool-augmented language systems.
-
-## Repository Status
-
-This repository hosts code and resources for the ToolHACE benchmark. Dataset files, data-generation pipelines, and evaluation scripts will be added here. Contributions and issues are welcome.
 
 ## Best Released ToolHACE Model
 
@@ -103,15 +97,4 @@ python evaluate/evaluate_save.py \
   --hf-split test \
   --save-preds evaluate/results/toolhace_modernbert_base_test_predictions.jsonl \
   --by-type
-```
-
-## Citation
-
-If you use ToolHACE in your work, please cite the paper:
-
-```bibtex
-@misc{toolhace,
-  title  = {ToolHACE: A Dataset for Detecting Hallucinations in Tool-Based LLM Responses},
-  note   = {Span-level benchmark for hallucination detection in tool-augmented LLM responses}
-}
 ```
