@@ -1,7 +1,7 @@
 # TOOLHACE-LookbackLens
 
 ## 📖 About
-[Brief description of what this project does]
+LookbackLens implementation for the TOOLHACE dataset (Rag-Truth like structure)
 
 ## 🚀 Getting Started
 
@@ -17,3 +17,4 @@ cd TOOLHACE-LookbackLens
 
 # Install dependencies
 pip install -r requirements.txt
+pip install -e ./transformers-4.32.0
