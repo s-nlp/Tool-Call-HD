@@ -20,7 +20,7 @@ This script computes:
 
 It also saves per-row predictions so new metrics can be recomputed without rerunning inference.
 
-Чтобы запустить:
+To run:
 ```bash
 python3 evaluate/evaluate_lettuce_metrics.py \
   --input dataset_v3_corrupted.json \
@@ -28,7 +28,27 @@ python3 evaluate/evaluate_lettuce_metrics.py \
   --summary-output dataset_v3_metrics.json
 ```
 
-## как проверить на ответе
+## Evaluation using VLLM\OpenRouter
+
+Training-free few-shot baseline: prompt a big model (via OpenRouter, OpenAI lib)
+to do BOTH 5-class hallucination classification AND span labeling on the TEST
+split, then score it against gold. A check-up of how well large models find these
+tool-augmented hallucinations out of the box.
+
+Example:
+```bash
+# generation
+python fewshot_llm_baseline.py ./test_dir \
+      --models openai/gpt-4o anthropic/claude-3.5-sonnet \
+      --out-dir runs/ --sample-per-class 40 --concurrency 8
+  python fewshot_llm_baseline.py test.csv --models qwen/qwen-2.5-72b-instruct --out-dir runs/
+  
+# classification
+  python check_eval.py --preds runs/gpt-4o_preds.jsonl
+  python check_eval.py --preds runs/claude-3.5-sonnet_preds.jsonl
+```
+
+## How to check answers
 ```bash
 python evaluate/export_lettuce_binary_labels.py \
   --input dataset_v3_tagged_cleaned.json \
