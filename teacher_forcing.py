@@ -30,7 +30,7 @@ def prepare_teacher_forcing(input_jsonl, output_jsonl, model_name="meta-llama/Ll
 
 if __name__ == "__main__":
     prepare_teacher_forcing(
-        "../datasets/TOOLHACE_final.jsonl",  # Your input dataset
-        "../datasets/TEAFOR_TOOLHACE_final.jsonl",  # Output teacher forcing file
+        "datasets/TOOLHACE_final.jsonl",  # Your input dataset
+        "datasets/TEAFOR_TOOLHACE_final.jsonl",  # Output teacher forcing file
         "meta-llama/Llama-2-7b-chat-hf"
     )
