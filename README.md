@@ -60,6 +60,7 @@ python step3_window_vote.py \
 #### step3_eval_spans.py
 Runs span-based classifiers over the lookback representations to detect hallucinations using predefined span segmentation.
 
+```bash
 python step3_eval_spans.py \
     --lookback_ratio_file lookback_ratios.pt \
     --classifier_file classifiers/classifier_anno-cnndm-7b_predefined_span.pkl \
@@ -68,7 +69,8 @@ python step3_eval_spans.py \
     --auth_token 'INSERT_TOKEN_NAME' \
     --max_span_length 50 \
     --merge_threshold 2
-    
+```
+
 #### form_preds_LBL.py 
 Converts model predictions (JSONL format) into a CSV file and aligns them with gold labels from the original dataset for evaluation.
 
