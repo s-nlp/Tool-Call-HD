@@ -1318,6 +1318,7 @@ class GenerationMixin:
         conversion_matrix=None,
         feat_layer=None,
         teacher_forcing_seq=None,
+        context_length=None,
         **kwargs,
     ) -> Union[GenerateOutput, torch.LongTensor]:
         r"""

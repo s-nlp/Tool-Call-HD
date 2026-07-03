@@ -5,7 +5,6 @@ import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from transformers.generation.stopping_criteria import StoppingCriteriaList, LLamaQaStoppingCriteria
 from transformers import GPT2LMHeadModel, GPT2Tokenizer
-
 import numpy as np
 
 class LLM:
@@ -28,31 +27,28 @@ class LLM:
             return model, tokenizer
         if self.device == "cuda":
             kwargs = {"torch_dtype": torch.float16, "offload_folder": f"offload/{model_name}"}
-            if self.num_gpus == "auto":
-                kwargs["device_map"] = "auto"
+            
+            if self.num_gpus != 1:
+                kwargs.update({
+                    "device_map": "auto",
+                    "max_memory": {i: f"{max_memory}GiB" for i in range(self.num_gpus)},
+                })
+                print(f"Using multi-GPU with {self.num_gpus} GPUs")
             else:
-                self.num_gpus = int(self.num_gpus)
-                if self.num_gpus != 1:
-                    kwargs.update({
-                        "device_map": "auto",
-                        "max_memory": {i: f"{max_memory}GiB" for i in range(self.num_gpus)},
-                    })
+                print("Using single GPU without quantization")
+                
         elif self.device == "cpu":
             kwargs = {}
         else:
             raise ValueError(f"Invalid device: {self.device}")
         
-        # low_cpu_mem_usage = True if not '70b' in model_name else False
         if auth_token is not None:
             tokenizer = AutoTokenizer.from_pretrained(model_name, token=auth_token)
             model = AutoModelForCausalLM.from_pretrained(model_name,
-                # low_cpu_mem_usage=True, 
                 token=auth_token, **kwargs)
         else:
             tokenizer = AutoTokenizer.from_pretrained(model_name)
-            model = AutoModelForCausalLM.from_pretrained(model_name,
-                # low_cpu_mem_usage=True, 
-                **kwargs)
+            model = AutoModelForCausalLM.from_pretrained(model_name, **kwargs)
 
         if self.device == "cuda" and self.num_gpus == 1:
             model.cuda()
@@ -72,10 +68,24 @@ class LLM:
             print("Added stop word: ", stop_word, 'with the ids', stop_word_ids, flush=True)
         self.stopping_criteria.append(LLamaQaStoppingCriteria(list_stop_word_ids))
 
-    def generate(self, input_text, max_new_tokens=256, top_p=0.95, top_k=0, temperature=0.8, mode='vanilla', verbose=True, remove_stop_words=False, return_attentions=False, guiding_classifier=None, chunk_size=None, num_candidates=None, conversion_matrix=None, extra_prompt_length=None, teacher_forcing_seq=None, **kwargs):
+    def generate(self, input_text, max_new_tokens=256, top_p=0.95, top_k=0, temperature=0.8, mode='vanilla', verbose=True, remove_stop_words=False, return_attentions=False, guiding_classifier=None, chunk_size=None, num_candidates=None, conversion_matrix=None, extra_prompt_length=None, teacher_forcing_seq=None, context_length=None, **kwargs):
         with torch.no_grad():
 
             input_ids = self.tokenizer(input_text, return_tensors="pt").input_ids.to(self.device)
+            
+            # Get the actual device from input_ids (important for multi-GPU)
+            actual_device = input_ids.device
+            
+            # CRITICAL FIX: Move teacher_forcing_seq to the same device as input_ids
+            if teacher_forcing_seq is not None:
+                if isinstance(teacher_forcing_seq, torch.Tensor):
+                    if teacher_forcing_seq.device != actual_device:
+                        teacher_forcing_seq = teacher_forcing_seq.to(actual_device)
+                elif isinstance(teacher_forcing_seq, list):
+                    teacher_forcing_seq = torch.tensor(teacher_forcing_seq).to(actual_device)
+                else:
+                    teacher_forcing_seq = torch.tensor(teacher_forcing_seq).to(actual_device)
+            
             if verbose:
                 print('MODEL INPUT LENGTH: {0}'.format(input_ids.shape[-1]))
             max_len = input_ids.shape[-1] + max_new_tokens
@@ -84,7 +94,7 @@ class LLM:
                 outputs = self.model.generate(inputs=input_ids, max_length=max_len, num_return_sequences=1,
                                     output_scores=True, return_dict_in_generate=True, 
                                     top_p=top_p, top_k=top_k, temperature=temperature, stopping_criteria=self.stopping_criteria, 
-                                    output_attentions=return_attentions, teacher_forcing_seq=teacher_forcing_seq, **kwargs)
+                                    output_attentions=return_attentions, teacher_forcing_seq=teacher_forcing_seq, context_length=context_length, **kwargs)
 
             elif mode == 'classifier_guided':
                 outputs = self.model.generate(input_ids, max_length=max_len, num_return_sequences=1,
