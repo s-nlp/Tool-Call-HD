@@ -18,3 +18,7 @@ cd TOOLHACE-LookbackLens
 # Install dependencies
 pip install -r requirements.txt
 pip install -e ./transformers-4.32.0
+```
+### Usage
+Below are the main scripts in the pipeline. Each section includes a short description and a ready-to-copy command.
+
