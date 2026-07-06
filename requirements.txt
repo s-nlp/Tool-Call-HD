@@ -1,0 +1,8 @@
+datasets
+openai
+pandas
+tqdm
+httpx
+transformers
+torch
+lettucedetect>=0.1.8

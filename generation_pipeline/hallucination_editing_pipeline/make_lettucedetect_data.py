@@ -91,19 +91,30 @@ def convert_row(row: dict) -> dict | None:
 
 def assign_splits(samples: list, dev_ratio: float, test_ratio: float,
                   seed: int = 42) -> list:
-    """Shuffle and assign train/dev/test splits in-place."""
+    """Assign train/dev/test splits GROUPED BY PROMPT identity.
+
+    Multiple hallucination types (1.2 / 2.1 / 3.1 / clean) are generated
+    from the same source dialogue and share the same prompt with nearly
+    identical answers — a per-row random split leaks these near-duplicates
+    across train/test. Rows with identical prompts always land in the same
+    split. Ratios are applied at the group level.
+    """
+    from collections import defaultdict
+    groups: dict[str, list] = defaultdict(list)
+    for s in samples:
+        groups[s.get("prompt", "")].append(s)
+
+    keys = sorted(groups)
     rng = random.Random(seed)
-    rng.shuffle(samples)
-    n = len(samples)
+    rng.shuffle(keys)
+
+    n = len(keys)
     n_test = max(1, int(n * test_ratio))
-    n_dev  = max(1, int(n * dev_ratio))
-    for i, s in enumerate(samples):
-        if i < n_test:
-            s["split"] = "test"
-        elif i < n_test + n_dev:
-            s["split"] = "dev"
-        else:
-            s["split"] = "train"
+    n_dev = max(1, int(n * dev_ratio))
+    for i, k in enumerate(keys):
+        split = "test" if i < n_test else "dev" if i < n_test + n_dev else "train"
+        for s in groups[k]:
+            s["split"] = split
     return samples
 
 

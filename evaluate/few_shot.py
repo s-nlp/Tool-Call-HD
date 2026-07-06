@@ -139,6 +139,9 @@ def load_rows(args: argparse.Namespace, env: dict) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 def extract_json(text: str) -> dict[str, Any]:
+    """Balanced-brace scan for the first top-level JSON object. The old
+    find("{")..rfind("}") slice breaks whenever the model emits braces in
+    surrounding prose or trailing text — do not reintroduce it."""
     text = text.strip()
     if text.startswith("```"):
         lines = text.splitlines()
@@ -146,10 +149,33 @@ def extract_json(text: str) -> dict[str, Any]:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        s, e = text.find("{"), text.rfind("}")
-        if s != -1 and e > s:
-            return json.loads(text[s:e + 1])
-        raise
+        pass
+    start = text.find("{")
+    while start != -1:
+        depth, in_str, esc = 0, False, False
+        for i in range(start, len(text)):
+            c = text[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == '"':
+                    in_str = False
+                continue
+            if c == '"':
+                in_str = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start:i + 1])
+                    except json.JSONDecodeError:
+                        break
+        start = text.find("{", start + 1)
+    raise json.JSONDecodeError("no parseable JSON object found", text, 0)
 
 
 def validate_prediction(pred: dict[str, Any], final_answer: str) -> dict[str, Any]:

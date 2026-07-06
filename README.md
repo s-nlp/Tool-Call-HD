@@ -4,6 +4,21 @@ ToolHACE is a span-level benchmark for **hallucination detection in tool-augment
 
 ---
 
+## Repository Layout
+
+```text
+generation_pipeline/
+  hallucination_editing_pipeline/    span-tagged editing of gold answers (types 1.2 / 2.1 / 3.1)
+  hallucination_generation_pipeline/ LLM generation + unify + judge + filter + export
+evaluate/                            zero/few-shot LLM baselines + metric scorers
+  verbalized/                        verbalized-baseline scorer (check_eval.py)
+lettucedetect/
+  train/                             ModernBERT (LettuceDetect) trainer
+  inference/                         inference + rich evaluation for trained checkpoints
+datasets/                            source data & released artifacts (Git LFS)
+toolhace_lettuce_utils.py            shared unified-row helpers
+```
+
 ## Motivation
 
 Tool-augmented language models ground their responses in external tool outputs, improving reliability beyond parametric knowledge alone. But grounding is not a guarantee. Even when the correct tool is called and returns accurate information, a model may still:
@@ -48,43 +63,46 @@ Install the core dependencies:
 pip install lettucedetect>=0.1.8 datasets transformers torch tqdm pandas
 ```
 
-Convert ToolHACE unified rows into the `query/context/output` JSONL format expected by `scripts/run_lettuce_detector.py`:
+Evaluate the best released checkpoint directly against the unified HF dataset
+(loads rows, runs inference, and computes metrics in one step):
 
 ```bash
-python scripts/prepare_lettuce_detector_input.py \
+python evaluate/evaluate_save.py \
+  --model s-nlp/tool-calling-hallucination-modernbert-base-unified-final \
   --hf-dataset s-nlp/toolace-unified-hallucinations \
   --hf-split test \
-  --output data/toolhace_test_for_lettuce.jsonl
+  --save-preds evaluate/results/toolhace_modernbert_base_test_predictions.jsonl \
+  --by-type
 ```
 
-Then run the best released checkpoint:
-
-```bash
-python scripts/run_lettuce_detector.py \
-  --method lettucedetect \
-  --checkpoint s-nlp/tool-calling-hallucination-modernbert-base-unified-final \
-  --data data/toolhace_test_for_lettuce.jsonl \
-  --output predictions/toolhace_modernbert_base_unified_final.jsonl
-```
+To run the model over new, unlabeled data instead, use
+`lettucedetect/inference/predict_spans.py` (see
+`lettucedetect/inference/README.md`).
 
 ## Train On ToolHACE
 
-To train a ModernBERT-based detector on labeled ToolHACE unified rows:
+Training uses the stock LettuceDetect trainer at `lettucedetect/train/train.py`,
+which expects a LettuceDetect-format JSON (`prompt`, `answer`,
+`labels: [{start, end, label}]`, `split`). Produce one from either pipeline:
 
 ```bash
-python scripts/train_toolhace_lettuce.py \
-  --hf-dataset s-nlp/toolace-unified-hallucinations \
-  --hf-train-split train \
-  --hf-dev-split dev \
-  --model-name answerdotai/ModernBERT-base \
-  --output-dir outputs/toolhace_modernbert_base \
-  --batch-size 4 \
-  --epochs 6 \
-  --learning-rate 1e-5 \
-  --grad-accum 8
+# from the editing pipeline
+python generation_pipeline/hallucination_editing_pipeline/make_lettucedetect_data.py
+
+# or from the LLM generation pipeline
+python generation_pipeline/hallucination_generation_pipeline/export_lettucedetect.py \
+  --input output/final_dataset/<RUN> --out-dir lettucedetect_data
 ```
 
-If you already have local train/dev files, replace the HF arguments with `--train-input ... --dev-input ...`.
+Then train:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python lettucedetect/train/train.py \
+  --ragtruth-path lettucedetect_data/toolhace_train.json \
+  --model-name answerdotai/ModernBERT-base \
+  --output-dir outputs/toolhace_modernbert_base \
+  --batch-size 4 --epochs 6 --learning-rate 1e-5 --grad-accum 8
+```
 
 ## Evaluate A Checkpoint
 

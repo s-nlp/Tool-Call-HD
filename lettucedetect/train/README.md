@@ -5,8 +5,9 @@
 library (`LettuceDetect/scripts/train.py`).
 
 No data is bundled here — supply your own RAGTruth-format training JSON (see
-`../../hallucination_generation_pipeline/` for how to produce one from this
-project's generated hallucinations via `make_lettucedetect_data.py`).
+`../../generation_pipeline/hallucination_editing_pipeline/make_lettucedetect_data.py`
+or `../../generation_pipeline/hallucination_generation_pipeline/export_lettucedetect.py`
+for how to produce one from this project's generated hallucinations).
 
 ## 1. Install deps
 

@@ -111,10 +111,27 @@ def token_f1(gold_spans, pred_spans, answer: str) -> float:
 
 
 def exact_span_match(gold_spans, pred_spans) -> bool:
-    """True if the sets of span texts are identical."""
-    def text_set(spans):
-        return {sp.get("text", "").strip() for sp in (spans or []) if sp.get("text", "").strip()}
-    return text_set(gold_spans) == text_set(pred_spans)
+    """True if the span sets are identical.
+
+    Compares (start, end) offset pairs when available — offsets are this
+    benchmark's ground truth, and text-set comparison silently collapses
+    duplicate-text spans and drops spans with missing text (an empty gold
+    set would 'exactly match' an empty prediction).
+    """
+    def span_set(spans):
+        out = set()
+        for sp in (spans or []):
+            s, e = sp.get("start"), sp.get("end")
+            if isinstance(s, int) and isinstance(e, int):
+                out.add((s, e))
+            else:
+                t = str(sp.get("text", "")).strip()
+                if t:
+                    out.add(("text", t))
+        return out
+
+    gold, pred = span_set(gold_spans), span_set(pred_spans)
+    return gold == pred
 
 
 # ---------------------------------------------------------------------------
@@ -191,20 +208,35 @@ def confusion_matrix(golds: list[str], preds: list[str], labels: list[str]) -> d
 # Main metric computation
 # ---------------------------------------------------------------------------
 
+UNPARSED = "<unparseable>"
+
+
 def compute_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    ok_rows = [r for r in rows if r.get("status") == "ok" and r.get("gold_type") and r.get("pred_type")]
-    error_count = len(rows) - len(ok_rows)
+    # PRINCIPLE (matches evaluate/verbalized/check_eval.py): unparseable or
+    # errored predictions stay IN the denominator and count as wrong — they
+    # are a model failure, not missing data. Dropping them silently inflates
+    # every metric and makes numbers incomparable with check_eval outputs.
+    scored_rows = [r for r in rows if r.get("gold_type")]
+    error_count = sum(1 for r in scored_rows if r.get("status") != "ok")
 
-    golds_type = [r["gold_type"] for r in ok_rows]
-    preds_type = [r["pred_type"] if r["pred_type"] in VALID_TYPES else "unknown" for r in ok_rows]
+    def pred_of(r: dict[str, Any]) -> str:
+        if r.get("status") != "ok" or not r.get("pred_type"):
+            return UNPARSED
+        return r["pred_type"] if r["pred_type"] in VALID_TYPES else "unknown"
 
-    # --- 5-class type classification ---
+    golds_type = [r["gold_type"] for r in scored_rows]
+    preds_type = [pred_of(r) for r in scored_rows]
+
+    # --- 5-class type classification (UNPARSED is never a target class:
+    #     it contributes FN to its gold class and FP to nothing) ---
     type_report = classification_report(golds_type, preds_type, VALID_TYPES)
-    cm = confusion_matrix(golds_type, preds_type, VALID_TYPES)
+    cm = confusion_matrix(golds_type, preds_type, VALID_TYPES + [UNPARSED])
 
-    # --- Binary: clean (0) vs. hallucinated (1) ---
+    # --- Binary: clean (0) vs. hallucinated (1). Same convention as
+    #     check_eval: an unparseable prediction never counts as a positive
+    #     "hallucinated" call (FN on hallucinated gold, TN on clean gold).
     gold_binary = [0 if g == "clean" else 1 for g in golds_type]
-    pred_binary = [0 if p == "clean" else 1 for p in preds_type]
+    pred_binary = [1 if (p != UNPARSED and p != "clean") else 0 for p in preds_type]
     tp_b = sum(1 for g, p in zip(gold_binary, pred_binary) if g == 1 and p == 1)
     fp_b = sum(1 for g, p in zip(gold_binary, pred_binary) if g == 0 and p == 1)
     fn_b = sum(1 for g, p in zip(gold_binary, pred_binary) if g == 1 and p == 0)
@@ -220,15 +252,18 @@ def compute_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "tp": tp_b, "fp": fp_b, "fn": fn_b, "tn": tn_b,
     }
 
-    # --- Span detection metrics (only for rows where both sides have spans) ---
+    ok_rows = [r for r in scored_rows if pred_of(r) != UNPARSED]
+
+    # --- Span detection metrics: gold-span rows stay in the denominator
+    #     even when the prediction failed to parse (pred spans = empty). ---
     span_rows = [
         r for r in ok_rows
         if r.get("gold_type") in SPAN_TYPES
         and r.get("pred_type") in SPAN_TYPES
     ]
-    # Also include rows where gold has spans but pred predicted a different non-clean type
+    # All rows where gold has spans — including unparseable predictions
     span_rows_gold_only = [
-        r for r in ok_rows
+        r for r in scored_rows
         if r.get("gold_type") in SPAN_TYPES
     ]
 
@@ -236,10 +271,15 @@ def compute_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     tok_f1_scores = []
     exact_matches = []
 
+    def pred_spans_of(r: dict[str, Any]) -> list:
+        if pred_of(r) not in SPAN_TYPES:
+            return []
+        return r.get("pred_span_labels", [])
+
     for r in span_rows_gold_only:
         answer = r.get("final_answer", "")
         gold_spans = r.get("gold_spans", [])
-        pred_spans = r.get("pred_span_labels", []) if r.get("pred_type") in SPAN_TYPES else []
+        pred_spans = pred_spans_of(r)
 
         char_f1_scores.append(char_overlap_f1(gold_spans, pred_spans, answer))
         tok_f1_scores.append(token_f1(gold_spans, pred_spans, answer))
@@ -264,7 +304,7 @@ def compute_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
         for r in t_rows:
             answer = r.get("final_answer", "")
             gold_spans = r.get("gold_spans", [])
-            pred_spans = r.get("pred_span_labels", []) if r.get("pred_type") in SPAN_TYPES else []
+            pred_spans = pred_spans_of(r)
             t_char.append(char_overlap_f1(gold_spans, pred_spans, answer))
             t_tok.append(token_f1(gold_spans, pred_spans, answer))
             t_exact.append(int(exact_span_match(gold_spans, pred_spans)))

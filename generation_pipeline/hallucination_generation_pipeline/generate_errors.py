@@ -332,31 +332,196 @@ def parse_data_spans(text: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# JSON diff utility
+# Value anchoring & targeted corruption
+# (replaces the old corrupt-then-diff flow — see generate_hallucination)
 # ---------------------------------------------------------------------------
 
-def diff_json_values(
-    original: dict | list, corrupted: dict | list
-) -> set[str]:
-    """Return the SET of original leaf values (as strings) that differ."""
-    changed = set()
+def parse_tool_response(raw: str):
+    """Tolerant parse: strict JSON first, then Python-literal style (ToolACE
+    tool turns frequently use single quotes / True / None). Non-JSON types
+    from literal_eval (Ellipsis from '...', tuples, sets) are sanitized so
+    the result round-trips through json.dumps."""
+    import ast
 
-    if type(original) != type(corrupted):
-        changed.add(str(original))
-        return changed
+    def sanitize(node):
+        if isinstance(node, dict):
+            return {str(k): sanitize(v) for k, v in node.items()}
+        if isinstance(node, (list, tuple, set)):
+            return [sanitize(v) for v in node]
+        if node is Ellipsis:
+            return "..."
+        if isinstance(node, (str, int, float, bool)) or node is None:
+            return node
+        return str(node)
 
-    if isinstance(original, dict):
-        for key in original:
-            if key in corrupted:
-                changed |= diff_json_values(original[key], corrupted[key])
-    elif isinstance(original, list):
-        for orig_item, corr_item in zip(original, corrupted):
-            changed |= diff_json_values(orig_item, corr_item)
-    else:
-        if original != corrupted:
-            changed.add(str(original))
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        pass
+    try:
+        return sanitize(ast.literal_eval(raw))
+    except (ValueError, SyntaxError, MemoryError, RecursionError):
+        return None
 
-    return changed
+
+def leaf_render(leaf) -> str:
+    """Canonical JSON-style rendering of a scalar leaf (what a model reading
+    the JSON would see): true/false/null, ints without .0, bare strings."""
+    if leaf is None:
+        return "null"
+    if isinstance(leaf, bool):
+        return "true" if leaf else "false"
+    if isinstance(leaf, float) and leaf.is_integer():
+        return str(int(leaf))
+    if isinstance(leaf, (int, float)):
+        return repr(leaf)
+    return str(leaf)
+
+
+def norm_val(s: str) -> str:
+    """Normalization bridge between model-written val="..." attributes and
+    leaf renderings: whitespace, surrounding quotes, true/false/null casing,
+    thousands separators, trailing .0."""
+    s = str(s).strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
+        s = s[1:-1].strip()
+    low = s.lower()
+    if low in ("true", "false", "null", "none"):
+        return "null" if low == "none" else low
+    num = s.replace(",", "") if re.fullmatch(r"-?[\d,]+(\.\d+)?", s) else s
+    try:
+        f = float(num)
+        return str(int(f)) if f.is_integer() else repr(f)
+    except (ValueError, OverflowError):
+        pass
+    return " ".join(s.split())
+
+
+
+def _boundary_find(haystack: str, needle: str) -> bool:
+    """Substring match guarded by alphanumeric word boundaries — '18' must
+    NOT match inside '1840' (see editing pipeline known-fixed bugs)."""
+    if not needle:
+        return False
+    pat = r"(?<![A-Za-z0-9])" + re.escape(needle) + r"(?![A-Za-z0-9])"
+    return re.search(pat, haystack) is not None
+
+
+def _boundary_replace(haystack: str, needle: str, repl: str) -> tuple[str, int]:
+    pat = r"(?<![A-Za-z0-9])" + re.escape(needle) + r"(?![A-Za-z0-9])"
+    new, n = re.subn(pat, lambda m: repl, haystack)
+    return new, n
+
+
+def value_occurs(obj, raw: str) -> bool:
+    """True if `raw` matches a scalar leaf (normalized) or appears as a
+    substring of a string leaf anywhere in obj."""
+    target = norm_val(raw)
+    stack = [obj]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+        else:
+            if norm_val(leaf_render(node)) == target:
+                return True
+            if isinstance(node, str) and _boundary_find(node, raw):
+                return True
+    return False
+
+
+def _cast_like(new_raw: str, old_leaf):
+    """Cast the model's replacement string to the type of the leaf it
+    replaces, falling back to string."""
+    s = str(new_raw).strip()
+    if isinstance(old_leaf, bool):
+        if s.lower() in ("true", "false"):
+            return s.lower() == "true"
+        return old_leaf  # refuse nonsense bool replacement
+    if isinstance(old_leaf, int) and not isinstance(old_leaf, bool):
+        try:
+            return int(float(s.replace(",", "")))
+        except ValueError:
+            return s
+    if isinstance(old_leaf, float):
+        try:
+            return float(s.replace(",", ""))
+        except ValueError:
+            return s
+    return s
+
+
+def apply_replacement(obj, old_raw: str, new_raw: str) -> int:
+    """Replace every leaf matching old_raw (normalized scalar match, or
+    substring within string leaves) with new_raw, type-preserved.
+    Mutates obj in place; returns the number of leaves changed."""
+    target = norm_val(old_raw)
+    count = 0
+
+    def visit(node):
+        nonlocal count
+        if isinstance(node, dict):
+            for k in list(node.keys()):
+                node[k] = descend(node[k])
+        elif isinstance(node, list):
+            for i in range(len(node)):
+                node[i] = descend(node[i])
+        return node
+
+    def descend(leaf):
+        nonlocal count
+        if isinstance(leaf, (dict, list)):
+            return visit(leaf)
+        if norm_val(leaf_render(leaf)) == target:
+            count += 1
+            return _cast_like(new_raw, leaf)
+        if isinstance(leaf, str):
+            new_leaf, n = _boundary_replace(leaf, old_raw, str(new_raw))
+            if n:
+                count += n
+                return new_leaf
+        return leaf
+
+    if isinstance(obj, (dict, list)):
+        visit(obj)
+    return count
+
+
+def extract_json_object(text: str) -> dict | None:
+    """Balanced-brace scan for the first top-level JSON object. Greedy regex
+    breaks on braces inside string values — do not reintroduce it."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    start = text.find("{")
+    while start != -1:
+        depth, in_str, esc = 0, False, False
+        for i in range(start, len(text)):
+            c = text[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == '"':
+                    in_str = False
+                continue
+            if c == '"':
+                in_str = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start:i + 1])
+                    except json.JSONDecodeError:
+                        break
+        start = text.find("{", start + 1)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -434,25 +599,22 @@ def build_user_message(
 HALLUCINATION_STEP1_SYSTEM = """\
 You are a data-generation assistant for an LLM evaluation benchmark.
 
-Your task: given a tool's JSON response, produce a MODIFIED version of it
-where some values have been changed so the data is factually different.
+You are given a tool's JSON response and a list of CANDIDATE VALUES — the
+values from that response which the assistant's answer actually surfaced.
+
+Your task: pick 1 to 3 of the candidate values and invent a plausible
+replacement for each, so the data becomes factually different.
 
 Rules:
-1. Change at least 1 but no more than 3 distinct values (numbers, names,
-   dates, statuses, enums, booleans).
-2. Keep the JSON structure, keys, and schema IDENTICAL to the original.
-3. Changed values must be the same type and plausible for the field.
-4. Do NOT add or remove any keys or array items.
-5. The changes should be subtle — not obviously absurd.
+1. "old" must be copied VERBATIM from the candidate list — do not
+   reformat, round, or re-quote it.
+2. "new" must be the same kind of value (number for number, date for
+   date, name for name) and plausible for the field — subtle, not absurd.
+3. "new" must be genuinely different from "old".
+4. Pick between 1 and 3 candidates. Never invent values not in the list.
 
-TARGETING (when target fields are specified):
-If a list of TARGET FIELDS is provided, prefer to change values at those
-field paths. These are the fields most likely to appear in the assistant's
-answer, so changing them produces visible hallucinations. You may still
-make changes outside the target list if it improves realism, but ALWAYS
-modify at least one target field if any are given.
-
-Respond with ONLY the modified JSON, no explanations or markdown fences."""
+Respond with ONLY this JSON object, no explanations or markdown fences:
+{"replacements": [{"old": "<verbatim candidate>", "new": "<replacement>"}]}"""
 
 CORRECT_SYSTEM = """\
 You are a helpful AI assistant. The user asked a question and a tool was
@@ -744,65 +906,108 @@ async def generate_hallucination(
     sample: Sample, idx: int,
     correct_result: dict | None = None,
 ) -> dict | None:
+    """Span-targeted corruption (same lesson as the editing pipeline's
+    1.1 -> 1.2 move). Flow:
+      1. anchor: keep data_spans whose source_value is actually locatable
+         in the parsed original tool response (normalized match)
+      2. LLM picks 1-3 candidates and invents replacements (tiny JSON)
+      3. replacements are applied PROGRAMMATICALLY -> corrupted response is
+         valid JSON by construction
+      4. hal_spans = data_spans whose source_value was replaced -> the span
+         match is guaranteed by construction
+    Distinct WARN codes per failure mode so yield problems stay diagnosable.
+    """
     if not correct_result or not correct_result.get("data_spans"):
-        print(f"  [WARN] hallucination_{idx}: no correct result, skipping")
+        print(f"  [WARN] hallucination_{idx}: no-correct-result, skipping")
         return None
 
-    # Step 1: corrupt tool response
-    # When coverage info is available, instruct the corruptor to target
-    # fields that are actually surfaced in answers — corrupting unused
-    # metadata produces no visible hallucination.
-    corruption_prompt = (
-        f"ORIGINAL TOOL RESPONSE:\n{sample.tool_response}\n\n"
-    )
-    if sample.used_fields:
-        corruption_prompt += (
-            f"TARGET FIELDS (these are surfaced in answers — prefer to "
-            f"change at least one of these):\n{sample.used_fields}\n\n"
-        )
-    corruption_prompt += "Produce the modified version with changed values."
+    orig_json = parse_tool_response(sample.tool_response)
+    if orig_json is None or not isinstance(orig_json, (dict, list)):
+        print(f"  [WARN] hallucination_{idx}: unparseable-tool-response, skipping")
+        return None
 
-    corrupted = await call_llm(
-        sem, cli, cfg, HALLUCINATION_STEP1_SYSTEM,
-        corruption_prompt,
+    data_spans = correct_result["data_spans"]
+
+    # Step 1: anchor — candidates are source_values locatable in the response.
+    # Fallback: if val="..." doesn't anchor, try the span's display text
+    # (models occasionally swap the two).
+    candidates, seen, unanchored = [], set(), []
+    for s in data_spans:
+        for sv in (s.get("source_value", ""), s.get("text", "")):
+            key = norm_val(sv)
+            if not key or key in seen:
+                continue
+            if value_occurs(orig_json, sv):
+                seen.add(key)
+                candidates.append(sv)
+                break
+        else:
+            if s.get("source_value"):
+                unanchored.append(s["source_value"])
+    if not candidates:
+        examples = ", ".join(repr(u)[:40] for u in unanchored[:3])
+        print(f"  [WARN] hallucination_{idx}: no-anchorable-values "
+              f"(e.g. {examples}), skipping")
+        return None
+
+    # Step 2: LLM proposes replacements among the candidates
+    candidate_block = "\n".join(f"  - {c}" for c in candidates)
+    user_prompt = (
+        f"TOOL RESPONSE (JSON):\n{json.dumps(orig_json, ensure_ascii=False)}\n\n"
+        f"CANDIDATE VALUES (copy 'old' verbatim from this list):\n"
+        f"{candidate_block}\n\n"
+        f"Return the replacements JSON object."
+    )
+    raw = await call_llm(
+        sem, cli, cfg, HALLUCINATION_STEP1_SYSTEM, user_prompt,
         temperature=0.7,
     )
-    if not corrupted:
+    if not raw:
+        print(f"  [WARN] hallucination_{idx}: llm-no-output, skipping")
         return None
 
-    if corrupted.startswith("```"):
-        corrupted = corrupted.split("\n", 1)[-1]
-    if corrupted.endswith("```"):
-        corrupted = corrupted.rsplit("```", 1)[0]
-    corrupted = corrupted.strip()
-
-    try:
-        orig_json = json.loads(sample.tool_response)
-        corr_json = json.loads(corrupted)
-    except json.JSONDecodeError:
-        print(f"  [WARN] hallucination_{idx}: invalid JSON, skipping")
+    parsed = extract_json_object(raw)
+    replacements = (parsed or {}).get("replacements")
+    if not isinstance(replacements, list) or not replacements:
+        print(f"  [WARN] hallucination_{idx}: llm-bad-replacements, skipping")
         return None
 
-    changed_values = diff_json_values(orig_json, corr_json)
-    if not changed_values:
-        print(f"  [WARN] hallucination_{idx}: no values changed, skipping")
+    # Step 3: apply programmatically, keeping only real, anchored changes
+    candidate_norms = {norm_val(c) for c in candidates}
+    corrupted_json = json.loads(json.dumps(orig_json))  # deep copy
+    changed_norms: set[str] = set()
+    for r in replacements[:3]:
+        if not isinstance(r, dict):
+            continue
+        old, new = str(r.get("old", "")), str(r.get("new", ""))
+        if not old or not new:
+            continue
+        key = norm_val(old)
+        if key not in candidate_norms or norm_val(new) == key:
+            continue  # invented value or non-change
+        if apply_replacement(corrupted_json, old, new) > 0:
+            changed_norms.add(key)
+    if not changed_norms:
+        print(f"  [WARN] hallucination_{idx}: no-applied-replacements, skipping")
         return None
 
+    # Step 4: spans follow from the applied replacements by construction.
+    # Check both norms — the anchor may have come from the display-text
+    # fallback in Step 1.
     answer = correct_result["generated_answer"]
-    data_spans = correct_result["data_spans"]
     hal_spans = [
         {"start": s["start"], "end": s["end"], "text": s["text"]}
         for s in data_spans
-        if s["source_value"] in changed_values
+        if norm_val(s.get("source_value", "")) in changed_norms
+        or norm_val(s.get("text", "")) in changed_norms
     ]
-
     if not hal_spans:
-        print(f"  [WARN] hallucination_{idx}: no spans matched, skipping")
+        print(f"  [WARN] hallucination_{idx}: no-spans-matched, skipping")
         return None
 
     rec = base_record(sample, "hallucination", idx)
     # Override tool_response with the corrupted version (the "context")
-    rec["tool_response"] = corrupted
+    rec["tool_response"] = json.dumps(corrupted_json, ensure_ascii=False)
     rec["original_tool_response"] = sample.tool_response
     rec["generated_answer"] = answer
     rec["spans"] = hal_spans
@@ -969,22 +1174,25 @@ async def generate_independent_class(
 async def generate_correct_class(
     sem, cli, cfg, samples, samples_per_class,
 ) -> list[dict]:
-    subset = samples
-    if samples_per_class and samples_per_class < len(samples):
-        subset = random.sample(samples, samples_per_class)
+    # Keep GLOBAL indices when subsampling — record ids ("correct_<idx>")
+    # are the pairing key for the hallucination class, so they must index
+    # into the full `samples` list, never into the random subset.
+    indexed = list(enumerate(samples))
+    if samples_per_class and samples_per_class < len(indexed):
+        indexed = random.sample(indexed, samples_per_class)
 
     print(f"\n{'='*60}")
-    print(f"Generating class: correct ({len(subset)} samples)")
+    print(f"Generating class: correct ({len(indexed)} samples)")
     print(f"{'='*60}")
 
-    progress = ProgressTracker(len(subset), "correct")
+    progress = ProgressTracker(len(indexed), "correct")
 
     async def wrapped(sample, idx):
         result = await generate_correct(sem, cli, cfg, sample, idx)
         progress.tick(success=result is not None)
         return result
 
-    tasks = [wrapped(s, i) for i, s in enumerate(subset)]
+    tasks = [wrapped(s, i) for i, s in indexed]
     raw = await asyncio.gather(*tasks)
     progress.finish()
     return [r for r in raw if r is not None]
@@ -998,10 +1206,23 @@ async def generate_hallucination_class(
         idx = int(cr["id"].split("_")[1])
         correct_by_id[idx] = cr
 
-    candidates = [
-        (s, i, correct_by_id[i]) for i, s in enumerate(samples)
-        if i in correct_by_id
-    ]
+    # Pair by global index AND verify identity via sample_id — a silent
+    # cross-dialogue pairing produces mislabeled rows, which is worse than
+    # a skip. (This is the bug that made --samples-per-class runs fail
+    # with 'no-anchorable-values' on nearly every row.)
+    candidates, mismatched = [], 0
+    for i, s in enumerate(samples):
+        cr = correct_by_id.get(i)
+        if cr is None:
+            continue
+        if str(cr.get("sample_id")) != str(s.sample_id):
+            mismatched += 1
+            continue
+        candidates.append((s, i, cr))
+    if mismatched:
+        print(f"  [WARN] hallucination pairing: {mismatched} correct results "
+              f"had sample_id mismatch and were skipped — "
+              f"stale correct_results from a different run/subset?")
 
     if samples_per_class and samples_per_class < len(candidates):
         candidates = random.sample(candidates, samples_per_class)

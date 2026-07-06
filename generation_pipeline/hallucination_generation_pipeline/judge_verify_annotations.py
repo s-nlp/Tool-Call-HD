@@ -59,7 +59,7 @@ from openai import AsyncOpenAI, APIError
 # ---------------------------------------------------------------------------
 
 CLASS_DEFINITIONS = """\
-- "answer_missmatch": The final assistant answer states information that
+- "answer_mismatch": The final assistant answer states information that
   directly contradicts or substitutes values from the tool response (e.g.
   wrong company name, wrong number, wrong entity). The tool response IS
   present and the assistant misread or swapped data from it. Span labels
@@ -105,7 +105,7 @@ JUDGE_SCHEMA = """\
   "type_is_correct": true | false,
   "span_labels_are_correct": true | false,
   "reasoning_short": "brief explanation (<= 2 sentences)",
-  "recommended_type": "answer_missmatch" | "missing_tool" | "overgeneration" | "undergeneration" | "clean" | "unknown",
+  "recommended_type": "answer_mismatch" | "missing_tool" | "overgeneration" | "undergeneration" | "clean" | "unknown",
   "missing_hallucination_spans": [
     {"text": "hallucinated text missing from labels", "reason": "why it should be labeled"}
   ],
@@ -194,9 +194,18 @@ def load_rows_from_csv(path: Path, limit: int | None = None) -> list[dict]:
 def load_rows_from_hf(
     name: str, split: str = "train", limit: int | None = None
 ) -> list[dict]:
-    from datasets import load_dataset
+    from datasets import load_dataset, load_from_disk
 
-    ds = load_dataset(name, split=split)
+    # Local save_to_disk directories (Dataset or DatasetDict) must go through
+    # load_from_disk — load_dataset() cannot read them.
+    p = Path(name)
+    if p.is_dir() and ((p / "dataset_info.json").exists()
+                       or (p / "dataset_dict.json").exists()):
+        ds = load_from_disk(str(p))
+        if hasattr(ds, "keys") and not hasattr(ds, "column_names"):  # DatasetDict
+            ds = ds[split]
+    else:
+        ds = load_dataset(name, split=split)
     if limit:
         ds = ds.select(range(min(limit, len(ds))))
     rows = []
@@ -332,7 +341,8 @@ _REQUIRED_KEYS = {
 
 _ROW_JUDGMENT_VALUES = {"pass", "fail", "uncertain"}
 _RECOMMENDED_TYPE_VALUES = {
-    "answer_missmatch",
+    "answer_mismatch",
+    "answer_missmatch",  # legacy misspelling — normalized below
     "missing_tool",
     "overgeneration",
     "undergeneration",
@@ -379,6 +389,8 @@ def validate_judgment(j: dict, row: dict) -> tuple[dict, list[str]]:
         raise ValueError(f"Bad row_judgment: {j['row_judgment']!r}")
     if j["recommended_type"] not in _RECOMMENDED_TYPE_VALUES:
         raise ValueError(f"Bad recommended_type: {j['recommended_type']!r}")
+    if j["recommended_type"] == "answer_missmatch":
+        j["recommended_type"] = "answer_mismatch"
     for boolfield in (
         "hallucination_present",
         "type_is_correct",
@@ -468,8 +480,26 @@ async def judge_one(
     }
 
 
+def load_done_keys(output_path: Path) -> set[tuple[str, str]]:
+    """(dialogue_id, stored_type) pairs already judged successfully."""
+    done: set[tuple[str, str]] = set()
+    if not output_path.exists():
+        return done
+    with output_path.open() as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if r.get("error") is None and r.get("judgment") is not None:
+                done.add((str(r.get("dialogue_id")), str(r.get("stored_type"))))
+    return done
+
+
 async def run_judge(
-    rows: list[dict], cfg: JudgeConfig, output_path: Path
+    rows: list[dict], cfg: JudgeConfig, output_path: Path, resume: bool = False
 ) -> list[dict]:
     client = AsyncOpenAI(
         api_key=cfg.api_key, base_url=cfg.base_url, timeout=cfg.request_timeout
@@ -479,8 +509,20 @@ async def run_judge(
     results: list[dict] = []
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    mode = "w"
+    if resume:
+        done = load_done_keys(output_path)
+        before = len(rows)
+        rows = [r for r in rows
+                if (str(r["dialogue_id"]), str(r["type"])) not in done]
+        print(f"Resume: {before - len(rows)} rows already judged, "
+              f"{len(rows)} remaining")
+        if not rows:
+            return []
+        mode = "a"
+
     # Write progressively so we don't lose progress on a crash.
-    with output_path.open("w") as fh:
+    with output_path.open(mode) as fh:
         tasks = [asyncio.create_task(judge_one(client, cfg, r, sem)) for r in rows]
         for i, fut in enumerate(asyncio.as_completed(tasks), start=1):
             result = await fut
@@ -585,6 +627,12 @@ def main() -> None:
     p.add_argument("--max-tokens", type=int, default=1024)
     p.add_argument("--concurrency", type=int, default=8)
     p.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip (dialogue_id, type) pairs already judged successfully in "
+             "--output; append new verdicts instead of overwriting",
+    )
+    p.add_argument(
         "--no-json-response-format",
         action="store_true",
         help="Disable response_format={'type':'json_object'} (use for models that don't support it)",
@@ -617,7 +665,7 @@ def main() -> None:
     print(f"Loaded {len(rows)} rows. Judging with {cfg.model} @ {cfg.base_url}")
     print(f"Writing judgments to {args.output}")
 
-    results = asyncio.run(run_judge(rows, cfg, args.output))
+    results = asyncio.run(run_judge(rows, cfg, args.output, resume=args.resume))
     print_summary(results)
 
 
