@@ -117,3 +117,58 @@ python evaluate/evaluate_save.py \
   --save-preds evaluate/results/toolhace_modernbert_base_test_predictions.jsonl \
   --by-type
 ```
+
+## Lookback-Lens guide
+
+Run this script to obtain teacher forcing token ids for the lookback ratios extraction (denote the authentication token and the destination path inside the script before running it):
+
+```bash
+python lookbacklens/teacher_forcing.py
+```
+
+To compute lookback ratios on the existing model answers run:
+
+```bash
+python lookbacklens/step01.py \
+    --model-name meta-llama/Llama-2-7b-chat-hf \
+    --data-path dataset.jsonl \
+    --output-path lookback_ratios.pt \
+    --teacher-forcing-jsonl teacher_forcing_ids.jsonl \
+    --auth-token 'INSERT_THE_TOKEN_HERE' \
+    --custom-dataset \
+    --num-gpus 1 \
+    --max-memory 15 \
+    --max-new-tokens 408
+```
+
+To get predictions using the sliding window classifier:
+
+```bash
+python lookbacklens/step3_window_vote.py \
+    --lookback_ratio_file lookback_ratios.pt \
+    --classifier_file classifiers/classifier_anno-nq-7b_sliding_window_8.pkl \
+    --auth_token 'INSERT_THE_TOKEN_HERE' \
+    --output_file nq_window_preds.jsonl \
+    --tokenizer_name meta-llama/Llama-2-7b-chat-hf
+```
+To get the predictions using the span based classifier:
+
+```bash
+python lookbacklens/step3_eval_spans.py \
+    --lookback_ratio_file lookback_ratios.pt \
+    --classifier_file classifiers/classifier_anno-cnndm-7b_predefined_span.pkl \
+    --output_file cnndm_span_preds.jsonl \
+    --tokenizer_name meta-llama/Llama-2-7b-chat-hf \
+    --auth_token 'INSERT_TOKEN_NAME' \
+    --max_span_length 50 \
+    --merge_threshold 2
+```
+
+To tranform the jsonl predictions into the ready-to-evaluate structure with gold labels:
+
+```bash
+python lookbacklens/form_preds_LBL.py \
+    --pred nq_span.jsonl \
+    --gold dataset.jsonl \
+    --output NQ_SPAN.csv
+```
