@@ -15,7 +15,7 @@ evaluate/                            zero/few-shot LLM baselines + metric scorer
 lettucedetect/
   train/                             ModernBERT (LettuceDetect) trainer
   inference/                         inference + rich evaluation for trained checkpoints
-datasets/                            source data & released artifacts (Git LFS)
+datasets/                            source data
 toolhace_lettuce_utils.py            shared unified-row helpers
 ```
 
@@ -53,7 +53,7 @@ Our best released LettuceDetect-style checkpoint is:
 
 The unified ToolHACE evaluation scripts in this repository default to the Hugging Face dataset:
 
-- `s-nlp/toolace-unified-hallucinations`
+- [`s-nlp/toolace-unified-hallucinations_upd_v2`](https://huggingface.co/datasets/s-nlp/toolace-unified-hallucinations_upd_v2)
 
 ## Run The Best Model
 
@@ -67,9 +67,10 @@ Evaluate the best released checkpoint directly against the unified HF dataset
 (loads rows, runs inference, and computes metrics in one step):
 
 ```bash
+export HF_TOKEN="your_token_id"
 python evaluate/evaluate_save.py \
   --model s-nlp/tool-calling-hallucination-modernbert-base-unified-final \
-  --hf-dataset s-nlp/toolace-unified-hallucinations \
+  --hf-dataset s-nlp/toolace-unified-hallucinations_upd_v2 \
   --hf-split test \
   --save-preds evaluate/results/toolhace_modernbert_base_test_predictions.jsonl \
   --by-type
@@ -111,7 +112,7 @@ To compute response-level, character-level, span-level, and by-type metrics whil
 ```bash
 python evaluate/evaluate_save.py \
   --model s-nlp/tool-calling-hallucination-modernbert-base-unified-final \
-  --hf-dataset s-nlp/toolace-unified-hallucinations \
+  --hf-dataset s-nlp/toolace-unified-hallucinations_upd_v2 \
   --hf-split test \
   --save-preds evaluate/results/toolhace_modernbert_base_test_predictions.jsonl \
   --by-type
