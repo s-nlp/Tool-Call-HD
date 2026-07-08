@@ -164,12 +164,7 @@ Russian/Glaive-RU branch were dropped as out of scope for the main pipeline.
 
 ## Known-fixed bugs (do not reintroduce)
 
-- `collect_final.py`, `merge_dataset.py`, `make_lettucedetect_data.py`, and
-  `test_output.py` previously pointed at a `last dub/` directory that no longer
-  exists and/or legacy `type1/type2/type3` filenames that don't match what
-  `generate.py` actually produces (`type2_1_output.jsonl`, `type1_2_output.jsonl`,
-  `type3_1_output.jsonl`). Fixed here to read from `output/singlehop_new/` and
-  `output/pruneddataset/` with the correct filenames.
+
 - Word-boundary-only span matching in Type 2.1 — never match substrings (e.g. `18`
   must not match inside `1840`).
 - Type 1.1/1.2 require Type 2.1 output to exist first (`generate.py` enforces this).
