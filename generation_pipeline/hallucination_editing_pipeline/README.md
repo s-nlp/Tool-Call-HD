@@ -18,11 +18,8 @@ compatibility / historical runs) but should not be used for new generation.
 | Type | Name | LLM needed | Status |
 |------|------|-----------|--------|
 | **2.1** | Undergeneration — cascade field deletion | No | ✅ current default |
-| **1.1** | Incorrect Info — schema hallucination gated by 2.1 spans | Yes (vLLM) | ✅ works, needs 2.1 first |
 | **1.2** | Incorrect Info — span-targeted schema hallucination | Yes (vLLM) | ✅ preferred over 1.1 (higher yield), needs 2.1 first |
 | **3.1** | Overgeneration — filler-filtered spurious sentence | Yes (vLLM) | ✅ current default |
-| ~~1~~ / ~~2~~ / ~~3~~ | Legacy flat types | Yes/No | ⚠️ superseded, do not use for new data |
-
 Multihop/pruning generation (`generate_multihop.py`, `run_multihop.sh`) has **not**
 been migrated to the new type scheme yet — it only produces the legacy flat types
 `1`/`2`/`3` (schema corruption / field deletion / overgeneration on multi-turn
