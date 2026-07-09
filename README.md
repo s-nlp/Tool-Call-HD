@@ -120,6 +120,29 @@ python evaluate/evaluate_save.py \
 
 ## Lookback-Lens guide
 
+Clone modified transformers version and original pretrained classifiers:
+
+```bash
+# 1. Clone the repo without downloading files
+git clone --filter=blob:none --no-checkout https://github.com/BogdanMonogov/TOOLHACE-LookbackLens.git
+cd TOOLHACE-LookbackLens
+
+# 2. Enable sparse-checkout
+git sparse-checkout init --cone
+
+# 3. Specify the folders you need
+git sparse-checkout set classifiers transformers-4.32.0
+
+# 4. Download the files from these folders
+git checkout main
+```
+Install the dependencies:
+
+```bash
+pip install -r requirements.txt
+pip install -e ./transformers-4.32.0
+```
+
 Run this script to obtain teacher forcing token ids for the lookback ratios extraction (denote the authentication token and the destination path inside the script before running it):
 
 ```bash
