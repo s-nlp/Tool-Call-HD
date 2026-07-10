@@ -15,9 +15,12 @@ For SINGLEHOP generation use generate.py / run.sh instead.
 
 Usage:
     python3 generate_multihop.py
-    python3 generate_multihop.py --types 2
-    python3 generate_multihop.py --types 1 3 --batch-size 10
+    python3 generate_multihop.py --types undergeneration
+    python3 generate_multihop.py --types answer_mismatch overgeneration --batch-size 10
     python3 generate_multihop.py --multistep other_multistep.json --out-dir my_results/
+
+Multihop only implements one (legacy) variant per class — there is no
+gated/targeted refinement here yet (see generate.py for those).
 """
 
 import argparse
@@ -33,6 +36,32 @@ PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(Path(__file__).parent))
 from hallucination_auto import HallucinationAuto
 
+# Word names are the canonical CLI interface; each maps to the internal
+# numeric type key used throughout this file.
+WORD_ALIASES = {
+    "answer_mismatch":   "1",
+    "undergeneration":   "2",
+    "overgeneration":    "3",
+}
+VALID_TYPES = list(WORD_ALIASES)
+NUMERIC_TO_WORD = {v: k for k, v in WORD_ALIASES.items()}  # for display only
+
+
+def _type_arg(value: str) -> str:
+    """Normalize a --types entry to its internal numeric key.
+
+    Accepts either the word name (e.g. "undergeneration") or, for backward
+    compatibility, the legacy numeric key (e.g. "2") directly.
+    """
+    if value in WORD_ALIASES:
+        return WORD_ALIASES[value]
+    if value in NUMERIC_TO_WORD:  # legacy numeric key, still accepted
+        return value
+    raise argparse.ArgumentTypeError(
+        f"invalid type {value!r}. Choices: {', '.join(VALID_TYPES)} "
+        f"(legacy numeric keys 1, 2, 3 also accepted)"
+    )
+
 
 def get_args():
     p = argparse.ArgumentParser(
@@ -46,7 +75,7 @@ def get_args():
     p.add_argument(
         "--base-url",
         default="http://172.17.0.1:8000/v1",
-        help="vLLM server URL (needed for type1 and type3)",
+        help="vLLM server URL (needed for answer_mismatch and overgeneration)",
     )
     p.add_argument("--api-key", default="dummy", help="API key")
     p.add_argument(
@@ -63,15 +92,15 @@ def get_args():
     p.add_argument(
         "--types",
         nargs="+",
+        type=_type_arg,
         default=["1", "2", "3"],
-        choices=["1", "2", "3"],
-        help="Which hallucination types to generate (default: all)",
+        help=f"Which hallucination types to generate. Choices: {', '.join(VALID_TYPES)} (default: all)",
     )
     p.add_argument(
         "--batch-size",
         type=int,
         default=5,
-        help="Concurrent async requests per batch for type1/type3 (default: 5)",
+        help="Concurrent async requests per batch for answer_mismatch and overgeneration (default: 5)",
     )
     p.add_argument(
         "--out-dir",
@@ -116,13 +145,13 @@ async def run(args):
                 print(f"  [fresh] removed {p}")
 
     types = args.types
-    print(f"\nGenerating types: {types}")
+    print(f"\nGenerating types: {[NUMERIC_TO_WORD.get(t, t) for t in types]}")
     print(f"Output dir: {out_dir.resolve()}")
-    print(f"Batch size: {args.batch_size} (type1/type3 only)\n")
+    print(f"Batch size: {args.batch_size} (answer_mismatch and overgeneration only)\n")
 
     if types == ["2"]:
         print("=" * 60)
-        print("TYPE 2 only — no LLM required")
+        print("UNDERGENERATION only — no LLM required")
         print("=" * 60)
         all_t2 = []
         for dlg in multistep:
@@ -140,7 +169,7 @@ async def run(args):
         out_path = out_dir / "pruned_type2.json"
         with open(out_path, "w") as f:
             json.dump(all_t2, f, ensure_ascii=False, indent=2)
-        print(f"Done: {len(all_t2)} type2 dialogues -> {out_path}")
+        print(f"Done: {len(all_t2)} undergeneration dialogues -> {out_path}")
     else:
         t1, t2, t3 = await ha.generate_pruned_multistep(
             client=client,
@@ -151,11 +180,11 @@ async def run(args):
             types=types,
         )
         if "1" in types:
-            print(f"type1 -> {len(t1)} dialogues")
+            print(f"answer_mismatch -> {len(t1)} dialogues")
         if "2" in types:
-            print(f"type2 -> {len(t2)} dialogues")
+            print(f"undergeneration -> {len(t2)} dialogues")
         if "3" in types:
-            print(f"type3 -> {len(t3)} dialogues")
+            print(f"overgeneration -> {len(t3)} dialogues")
 
     print("\nDone!")
 

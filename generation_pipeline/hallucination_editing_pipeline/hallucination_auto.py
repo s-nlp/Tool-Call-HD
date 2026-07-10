@@ -7,7 +7,7 @@ Split into four themed files for readability:
                   evaluate_hallucination).  This is the backbone of Type 1.
 
   singlehop.py  — Type 1 / 2 / 3 hallucination logic for single-turn QA:
-                  API call methods (type1_api, type2_delete, type3_api),
+                  API call methods (answer_mismatch_api, type2_delete, type3_api),
                   dataset generation loops (sync + async), system prompts.
 
   multihop.py   — Multistep dialogue injection + pruning-based generation:

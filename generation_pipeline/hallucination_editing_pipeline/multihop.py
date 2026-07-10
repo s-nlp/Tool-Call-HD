@@ -7,9 +7,9 @@ Two capabilities
 -----------------
 
 1. LAST-TURN INJECTION (existing, ported from trash/hallucination_auto.py):
-   - detect_type1_spans / detect_type2_spans / detect_type3_spans
+   - detect_answer_mismatch_spans / detect_type2_spans / detect_type3_spans
    - _apply_hall_tags, _inject_last_turn
-   - generate_multistep_type1 / type2 / type3
+   - generate_multistep_answer_mismatch / type2 / type3
    These take pre-generated singlehop data and inject hallucinations into
    the LAST completed tool turn of each multistep dialogue.
 
@@ -24,7 +24,8 @@ Two capabilities
 
    Each sample is a PRUNED copy of the dialogue (truncated at the target turn)
    with a freshly generated hallucination at its last turn.
-   LLM calls are made for type1/type3; type2 uses only deletion (no LLM).
+   LLM calls are made for type1 (Answer Mismatch) / type3 (Overgeneration);
+   type2 (Undergeneration) uses only deletion (no LLM).
 
 Usage (quick-start):
     ha = HallucinationAuto()
@@ -222,7 +223,7 @@ class MultihopMixin:
         })
         return True
 
-    def detect_type1_spans(self, item: dict) -> tuple:
+    def detect_answer_mismatch_spans(self, item: dict) -> tuple:
         """Find char-level hallucinated spans for a Type-1 item.
 
         Uses 4-tier strategy: tag-based → original text search → corrupted text
@@ -574,14 +575,14 @@ class MultihopMixin:
 
         return dataset, log
 
-    def generate_multistep_type1(self, multistep: list, type1_labelled: list,
+    def generate_multistep_answer_mismatch(self, multistep: list, answer_mismatch_labelled: list,
                                   output_path: str) -> list:
-        """Inject Type-1 hallucinations into multistep dialogues (last turn).
+        """Inject Type-1 (Answer Mismatch) hallucinations into multistep dialogues (last turn).
 
-        type1_labelled rows must have: hallucinated_tool_response,
-        hallucination_labels, plain_answer (from label_type1_dataset).
+        answer_mismatch_labelled rows must have: hallucinated_tool_response,
+        hallucination_labels, plain_answer (from label_answer_mismatch_dataset).
         """
-        lookup = {r["user_prompt"]: r for r in type1_labelled
+        lookup = {r["user_prompt"]: r for r in answer_mismatch_labelled
                   if r.get("user_prompt") and r.get("hallucinated_tool_response")
                   and r.get("hallucination_labels")}   # drop no-op rows from source
         dataset, log = self._inject_last_turn(multistep, lookup, "type1")
@@ -646,7 +647,7 @@ class MultihopMixin:
         """Extract turn *turn_k* (0-indexed) from *dialogue* as a singlehop row.
 
         The tool_response is unwrapped from its JSON array to a single object
-        so the singlehop APIs (type1_api, type2_delete, type3_api) can handle it.
+        so the singlehop APIs (answer_mismatch_api, type2_delete, type3_api) can handle it.
 
         Returns a dict with: user_prompt, tool_response, tool_call,
         original_answer, system.
@@ -696,11 +697,11 @@ class MultihopMixin:
 
     # ── Per-row generation helpers ────────────────────────────────────────────
 
-    async def generate_type1_for_row(self, client, model: str, row: dict,
+    async def generate_answer_mismatch_for_row(self, client, model: str, row: dict,
                                       max_retries: int = 3) -> dict | None:
         """Generate Type-1 hallucination for a single singlehop row (async).
 
-        Calls type1_api (from SinglehopMixin) with retries.
+        Calls answer_mismatch_api (from SinglehopMixin) with retries.
         Returns the row enriched with hallucinated_tool_response,
         hallucination_labels, plain_answer; or None on failure.
         """
@@ -711,7 +712,7 @@ class MultihopMixin:
 
         for attempt in range(max_retries):
             try:
-                hall_dict, target, unlocked_paths = await self.type1_api_async(
+                hall_dict, target, unlocked_paths = await self.answer_mismatch_api_async(
                     client=client, model=model,
                     tool_response=row["tool_response"],
                     user_prompt=row["user_prompt"],
@@ -733,7 +734,7 @@ class MultihopMixin:
                     "eval_spans": spans,
                     "eval_summary": summary,
                 }
-                spans_labelled, plain = self.detect_type1_spans(enriched)
+                spans_labelled, plain = self.detect_answer_mismatch_spans(enriched)
                 if self._is_whole_answer_span(spans_labelled, plain):
                     continue  # string-leaf noise — retry won't help, but keeps loop clean
                 enriched["hallucination_labels"] = spans_labelled
@@ -836,11 +837,11 @@ class MultihopMixin:
         model       : model identifier
         multistep   : list of multistep dialogue dicts
         output_dir  : directory to save pruned_type1/2/3.json
-        batch_size  : concurrent async requests per batch (type1 and type3)
+        batch_size  : concurrent async requests per batch (type1/Answer Mismatch and type3/Overgeneration)
 
         Returns
         -------
-        (all_type1, all_type2, all_type3) — lists of injected dialogue dicts
+        (all_answer_mismatch, all_type2, all_type3) — lists of injected dialogue dicts
 
         Output files saved to output_dir:
           pruned_type1.json, pruned_type2.json, pruned_type3.json
@@ -849,12 +850,12 @@ class MultihopMixin:
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
 
-        all_type1: list = []
+        all_answer_mismatch: list = []
         all_type2: list = []
         all_type3: list = []
 
         # Load any existing partial results (resumable)
-        for lst, fname in [(all_type1, "pruned_type1.json"),
+        for lst, fname in [(all_answer_mismatch, "pruned_type1.json"),
                            (all_type2, "pruned_type2.json"),
                            (all_type3, "pruned_type3.json")]:
             p = out / fname
@@ -875,9 +876,9 @@ class MultihopMixin:
                 work_items.append((dlg, turn_k))
 
         print(f"\nPruning: {len(multistep)} dialogues → {len(work_items)} (dialogue, turn) pairs")
-        print(f"  (each pair generates up to 3 samples: type1, type2, type3)\n")
+        print(f"  (each pair generates up to 3 samples: type1/Answer Mismatch, type2/Undergeneration, type3/Overgeneration)\n")
 
-        # Process in batches for async type1/type3
+        # Process in batches for async type1/Answer Mismatch and type3/Overgeneration
         processed = 0
         for batch_start in range(0, len(work_items), batch_size):
             batch = work_items[batch_start:batch_start + batch_size]
@@ -897,7 +898,7 @@ class MultihopMixin:
             # ── Type 1: async, LLM ───────────────────────────────────────────
             if "1" in types:
                 t1_tasks = [
-                    self.generate_type1_for_row(client, model, self.extract_turn_as_row(dlg, turn_k))
+                    self.generate_answer_mismatch_for_row(client, model, self.extract_turn_as_row(dlg, turn_k))
                     for dlg, turn_k in batch
                 ]
                 t1_results = await asyncio.gather(*t1_tasks)
@@ -907,7 +908,7 @@ class MultihopMixin:
                         injected = self.inject_row_into_pruned(pruned, t1_row, "type1")
                         injected["_pruning_depth"] = turn_k + 1
                         injected["_dialogue_id"] = dlg["analysis"].get("dialogue_id", "")
-                        all_type1.append(injected)
+                        all_answer_mismatch.append(injected)
 
             # ── Type 3: async, LLM ───────────────────────────────────────────
             if "3" in types:
@@ -926,7 +927,7 @@ class MultihopMixin:
 
             # Save after every batch (incremental / resumable)
             processed += len(batch)
-            for lst, fname, t in [(all_type1, "pruned_type1.json", "1"),
+            for lst, fname, t in [(all_answer_mismatch, "pruned_type1.json", "1"),
                                    (all_type2, "pruned_type2.json", "2"),
                                    (all_type3, "pruned_type3.json", "3")]:
                 if t in types:
@@ -935,10 +936,10 @@ class MultihopMixin:
 
             print(f"  Batch {batch_start // batch_size + 1}: "
                   f"{processed}/{len(work_items)} pairs done | "
-                  f"type1={len(all_type1)} type2={len(all_type2)} type3={len(all_type3)}")
+                  f"answer_mismatch={len(all_answer_mismatch)} type2={len(all_type2)} type3={len(all_type3)}")
 
         print(f"\nPruning complete:")
-        print(f"  type1 → {len(all_type1)} dialogues ({out/'pruned_type1.json'})")
+        print(f"  answer_mismatch (type1) → {len(all_answer_mismatch)} dialogues ({out/'pruned_type1.json'})")
         print(f"  type2 → {len(all_type2)} dialogues ({out/'pruned_type2.json'})")
         print(f"  type3 → {len(all_type3)} dialogues ({out/'pruned_type3.json'})")
 
@@ -948,4 +949,4 @@ class MultihopMixin:
             if csv:
                 print(f"  RAGTruth JSONL: {csv}")
 
-        return all_type1, all_type2, all_type3
+        return all_answer_mismatch, all_type2, all_type3

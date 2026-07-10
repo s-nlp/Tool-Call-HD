@@ -2,9 +2,9 @@
 # ═══════════════════════════════════════════════════════════════
 # MULTIHOP generation — edit the CONFIG block below, then run:
 #
-#   ./scripts/run_multihop.sh          # all 3 types
-#   ./scripts/run_multihop.sh 3        # type 3 only
-#   ./scripts/run_multihop.sh 1 3      # types 1 and 3
+#   ./scripts/run_multihop.sh                                  # all 3 types
+#   ./scripts/run_multihop.sh overgeneration                   # overgeneration only
+#   ./scripts/run_multihop.sh answer_mismatch overgeneration   # answer_mismatch and overgeneration
 # ═══════════════════════════════════════════════════════════════
 
 set -e
@@ -32,7 +32,7 @@ BATCH_SIZE=50
 FRESH=0
 # ── END CONFIG ───────────────────────────────────────────────────
 
-TYPES="${@:-1 2 3}"
+TYPES="${@:-answer_mismatch undergeneration overgeneration}"
 
 FRESH_FLAG=""
 [ "$FRESH" = "1" ] && FRESH_FLAG="--fresh"

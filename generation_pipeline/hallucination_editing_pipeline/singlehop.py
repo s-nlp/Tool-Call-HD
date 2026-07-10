@@ -41,7 +41,7 @@ class SinglehopMixin:
         """True if any span covers >=50% of the answer (whole-answer noise).
 
         Catches both explicit 0→len spans and implicit whole-answer fallbacks
-        produced by detect_type1_spans when values can't be located.
+        produced by detect_answer_mismatch_spans when values can't be located.
         """
         if not spans or not plain:
             return False
@@ -68,7 +68,7 @@ class SinglehopMixin:
 
     # ── System prompts (override by passing system_prompt= to the API methods) ──
 
-    TYPE1_SYSTEM_PROMPT = (
+    ANSWER_MISMATCH_SYSTEM_PROMPT = (
         "You are a helpful assistant. Answer the user's question "
         "by calling the appropriate tool and returning the result as JSON."
     )
@@ -705,7 +705,7 @@ class SinglehopMixin:
                 continue
         raise json.JSONDecodeError("all recovery strategies failed", s, 0)
 
-    def type1_api(self, client, model: str, tool_response: str, user_prompt: str,
+    def answer_mismatch_api(self, client, model: str, tool_response: str, user_prompt: str,
                   howhow: Literal["smart", "dumb"] = "smart",
                   temperature: float = 0.8, max_tokens: int = 512,
                   system_prompt=None):
@@ -722,7 +722,7 @@ class SinglehopMixin:
         Returns:
           (hallucinated_dict, target_path, unlocked_paths)
         """
-        sys_prompt = system_prompt or self.TYPE1_SYSTEM_PROMPT
+        sys_prompt = system_prompt or self.ANSWER_MISMATCH_SYSTEM_PROMPT
         locked = self.get_locked_schema_for_tool(tool_response)
         if howhow == "smart":
             target, unlocked_paths, schema_dict = self.create_cascade_schema(locked)
@@ -739,13 +739,13 @@ class SinglehopMixin:
         )
         return self._recover_json(resp.choices[0].message.content), target, unlocked_paths
 
-    async def type1_api_async(self, client, model: str, tool_response: str,
+    async def answer_mismatch_api_async(self, client, model: str, tool_response: str,
                               user_prompt: str,
                               howhow: Literal["smart", "dumb"] = "smart",
                               temperature: float = 0.8, max_tokens: int = 512,
                               system_prompt=None):
-        """Async version of type1_api (requires AsyncOpenAI client)."""
-        sys_prompt = system_prompt or self.TYPE1_SYSTEM_PROMPT
+        """Async version of answer_mismatch_api (requires AsyncOpenAI client)."""
+        sys_prompt = system_prompt or self.ANSWER_MISMATCH_SYSTEM_PROMPT
         locked = self.get_locked_schema_for_tool(tool_response)
         if howhow == "smart":
             target, unlocked_paths, schema_dict = self.create_cascade_schema(locked)
@@ -1065,7 +1065,7 @@ class SinglehopMixin:
     # DATASET GENERATION — sync (one row at a time, resumable)
     # ══════════════════════════════════════════════════════════════════════════
 
-    def generate_type1_dataset(self, client, model: str, dataset: list,
+    def generate_answer_mismatch_dataset(self, client, model: str, dataset: list,
                                output_path: str,
                                howhow: Literal["smart", "dumb"] = "smart",
                                temperature: float = 0.8, max_tokens: int = 512,
@@ -1093,7 +1093,7 @@ class SinglehopMixin:
             success = False
             for attempt in range(max_retries):
                 try:
-                    hall_dict, target, unlocked_paths = self.type1_api(
+                    hall_dict, target, unlocked_paths = self.answer_mismatch_api(
                         client=client, model=model,
                         tool_response=row["tool_response"],
                         user_prompt=row["user_prompt"],
@@ -1119,7 +1119,7 @@ class SinglehopMixin:
                     break
                 except Exception as _e:
                     if attempt == 0:
-                        print(f"\n  [type1] row {idx} attempt {attempt} error: "
+                        print(f"\n  [type1/answer_mismatch] row {idx} attempt {attempt} error: "
                               f"{type(_e).__name__}: {_e}")
                     continue
             if not success:
@@ -1275,7 +1275,7 @@ class SinglehopMixin:
     # DATASET GENERATION — async (batched, faster for large datasets)
     # ══════════════════════════════════════════════════════════════════════════
 
-    async def _type1_single(self, client, model, row, howhow, temperature,
+    async def _answer_mismatch_single(self, client, model, row, howhow, temperature,
                             max_tokens, max_retries):
         """Process one row for async Type 1 generation. Returns row dict or None.
         Retries on no-op (LLM returned same values, no actual hallucination).
@@ -1292,7 +1292,7 @@ class SinglehopMixin:
 
         for attempt in range(max_retries):
             try:
-                hall_dict, target, unlocked_paths = await self.type1_api_async(
+                hall_dict, target, unlocked_paths = await self.answer_mismatch_api_async(
                     client=client, model=model,
                     tool_response=row["tool_response"],
                     user_prompt=row["user_prompt"],
@@ -1304,7 +1304,7 @@ class SinglehopMixin:
                 )
                 if not spans:
                     if attempt == max_retries - 1:
-                        print(f"  [type1 row] no spans after {max_retries} attempts "
+                        print(f"  [type1/answer_mismatch row] no spans after {max_retries} attempts "
                               f"(LLM returned same values) — target={target}")
                     continue
                 enriched = {
@@ -1316,8 +1316,8 @@ class SinglehopMixin:
                     "eval_spans": spans,
                     "eval_summary": summary,
                 }
-                # Run detect_type1_spans now so export always has clean labels
-                spans_labelled, plain = self.detect_type1_spans(enriched)
+                # Run detect_answer_mismatch_spans now so export always has clean labels
+                spans_labelled, plain = self.detect_answer_mismatch_spans(enriched)
                 if self._is_whole_answer_span(spans_labelled, plain):
                     continue
                 enriched["hallucination_labels"] = spans_labelled
@@ -1325,11 +1325,11 @@ class SinglehopMixin:
                 return enriched
             except Exception as _e:
                 if attempt == 0:
-                    print(f"  [type1 row] error: {type(_e).__name__}: {_e}")
+                    print(f"  [type1/answer_mismatch row] error: {type(_e).__name__}: {_e}")
                 continue
         return None
 
-    async def generate_type1_dataset_async(self, client, model: str, dataset: list,
+    async def generate_answer_mismatch_dataset_async(self, client, model: str, dataset: list,
                                            output_path: str,
                                            howhow: Literal["smart", "dumb"] = "smart",
                                            temperature: float = 0.8, max_tokens: int = 512,
@@ -1351,7 +1351,7 @@ class SinglehopMixin:
         for batch_start in range(0, len(remaining), batch_size):
             batch_indices = remaining[batch_start:batch_start + batch_size]
             tasks = [
-                self._type1_single(client, model, dataset[idx], howhow,
+                self._answer_mismatch_single(client, model, dataset[idx], howhow,
                                    temperature, max_tokens, max_retries)
                 for idx in batch_indices
             ]
@@ -1378,7 +1378,7 @@ class SinglehopMixin:
     # Only runs on records that passed Type 2.1 (quality gate).
     # ══════════════════════════════════════════════════════════════════════════
 
-    async def _type1_1_single(self, client, model, row, howhow, temperature,
+    async def _answer_mismatch_gated_single(self, client, model, row, howhow, temperature,
                               max_tokens, max_retries):
         """Process one Type 2.1-successful row for Type 1.1.
 
@@ -1403,7 +1403,7 @@ class SinglehopMixin:
 
         for attempt in range(max_retries):
             try:
-                hall_dict, target, unlocked_paths = await self.type1_api_async(
+                hall_dict, target, unlocked_paths = await self.answer_mismatch_api_async(
                     client=client, model=model,
                     tool_response=row["tool_response"],
                     user_prompt=row["user_prompt"],
@@ -1467,11 +1467,11 @@ class SinglehopMixin:
                 }
             except Exception as _e:
                 if attempt == 0:
-                    print(f"  [type1.1 row] error: {type(_e).__name__}: {_e}")
+                    print(f"  [type1.1/answer_mismatch_gated row] error: {type(_e).__name__}: {_e}")
                 continue
         return None
 
-    async def generate_type1_1_dataset_async(self, client, model: str,
+    async def generate_answer_mismatch_gated_dataset_async(self, client, model: str,
                                              type2_1_output_path: str,
                                              output_path: str,
                                              howhow: Literal["smart", "dumb"] = "smart",
@@ -1523,7 +1523,7 @@ class SinglehopMixin:
         for batch_start in range(0, len(remaining), batch_size):
             batch_indices = remaining[batch_start:batch_start + batch_size]
             tasks = [
-                self._type1_1_single(
+                self._answer_mismatch_gated_single(
                     client, model, successful[idx],
                     howhow, temperature, max_tokens, max_retries,
                 )
@@ -1582,7 +1582,7 @@ class SinglehopMixin:
                 quoted.append(f"results.{path}" if not path.startswith("results") else path)
         return quoted
 
-    async def type1_2_api_async(self, client, model: str, tool_response: str,
+    async def answer_mismatch_targeted_api_async(self, client, model: str, tool_response: str,
                                 user_prompt: str, target_paths: list,
                                 total_leaves: int,
                                 temperature: float = 0.8, max_tokens: int = 512):
@@ -1611,7 +1611,7 @@ class SinglehopMixin:
         except Exception:
             pass
 
-        sys_prompt = self.TYPE1_SYSTEM_PROMPT
+        sys_prompt = self.ANSWER_MISMATCH_SYSTEM_PROMPT
         if target_values:
             sys_prompt += (
                 "\n\nCRITICAL INSTRUCTION: The following values are INCORRECT and "
@@ -1630,7 +1630,7 @@ class SinglehopMixin:
         )
         return self._recover_json(resp.choices[0].message.content), target, unlocked_paths
 
-    async def _type1_2_single(self, client, model, row, temperature,
+    async def _answer_mismatch_targeted_single(self, client, model, row, temperature,
                                max_tokens, max_retries):
         """Process one Type 2.1 row for Type 1.2 generation.
 
@@ -1663,7 +1663,7 @@ class SinglehopMixin:
             # values at low temperature (IDs, short numbers, single-word values).
             attempt_temp = min(temperature + attempt * 0.2, 1.4)
             try:
-                hall_dict, target, unlocked_paths = await self.type1_2_api_async(
+                hall_dict, target, unlocked_paths = await self.answer_mismatch_targeted_api_async(
                     client=client, model=model,
                     tool_response=row["tool_response"],
                     user_prompt=row["user_prompt"],
@@ -1721,11 +1721,11 @@ class SinglehopMixin:
                 }
             except Exception as _e:
                 if attempt == 0:
-                    print(f"  [type1.2 row] error: {type(_e).__name__}: {_e}")
+                    print(f"  [type1.2/answer_mismatch_targeted row] error: {type(_e).__name__}: {_e}")
                 continue
         return None
 
-    async def generate_type1_2_dataset_async(self, client, model: str,
+    async def generate_answer_mismatch_targeted_dataset_async(self, client, model: str,
                                              type2_1_output_path: str,
                                              output_path: str,
                                              temperature: float = 0.8,
@@ -1763,7 +1763,7 @@ class SinglehopMixin:
         for batch_start in range(0, len(remaining), batch_size):
             batch_indices = remaining[batch_start:batch_start + batch_size]
             tasks = [
-                self._type1_2_single(
+                self._answer_mismatch_targeted_single(
                     client, model, successful[idx],
                     temperature, max_tokens, max_retries,
                 )

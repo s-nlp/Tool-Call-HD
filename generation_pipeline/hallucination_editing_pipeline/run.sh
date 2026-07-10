@@ -3,22 +3,22 @@
 # Singlehop hallucination generation pipeline
 #
 # Type map:
-#   2    flat leaf deletion           (no LLM)
-#   2.1  cascade deletion, clean spans (no LLM)               ← preferred
-#   1    schema-based hallucination   (vLLM)
-#   1.1  schema hallucination + 2.1 span gate (vLLM)          ← needs 2.1 first
-#   1.2  span-targeted schema hallucination (vLLM)            ← preferred, needs 2.1 first
-#        (unlocks only answer-quoted leaves → higher yield than 1.1)
-#   3    tool overgeneration          (vLLM)
-#   3.1  overgeneration + filler gate (vLLM)                  ← preferred
+#   undergeneration_legacy     flat leaf deletion           (no LLM)
+#   undergeneration            cascade deletion, clean spans (no LLM)               ← preferred
+#   answer_mismatch_legacy     schema-based hallucination   (vLLM)
+#   answer_mismatch_gated      schema hallucination + undergeneration span gate (vLLM)  ← needs undergeneration first
+#   answer_mismatch_targeted   span-targeted schema hallucination (vLLM) ← preferred, needs undergeneration first
+#                              (unlocks only answer-quoted leaves → higher yield than gated)
+#   overgeneration_legacy      tool overgeneration          (vLLM)
+#   overgeneration             overgeneration + filler gate (vLLM)                  ← preferred
 #
 # Examples:
-#   ./run.sh                  → default: 2.1 then 1.1 then 3.1
-#   ./run.sh 2.1 1.2 3.1      → use 1.2 instead of 1.1
-#   ./run.sh 2.1 3.1          → skip type-1 entirely
-#   ./run.sh 1 2 3            → legacy types
-#   ./run.sh 2.1              → just cascade deletion (no server needed)
-#   FRESH=1 ./run.sh 3.1      → re-generate type 3.1 from scratch
+#   ./run.sh                                                              → default: undergeneration, answer_mismatch_gated, overgeneration
+#   ./run.sh undergeneration answer_mismatch_targeted overgeneration      → use targeted instead of gated
+#   ./run.sh undergeneration overgeneration                               → skip answer-mismatch entirely
+#   ./run.sh answer_mismatch_legacy undergeneration_legacy overgeneration_legacy  → legacy types
+#   ./run.sh undergeneration                                              → just cascade deletion (no server needed)
+#   FRESH=1 ./run.sh overgeneration                                       → re-generate overgeneration from scratch
 # ═══════════════════════════════════════════════════════════════════════════════
 
 set -e
@@ -44,18 +44,20 @@ BATCH_SIZE=50
 # Set to 1 to delete existing output files and start fresh
 FRESH="${FRESH:-0}"
 
-# Set to 1 to use the slow sync path (types 1 / 3 only; no effect on .1 types)
+# Set to 1 to use the slow sync path (answer_mismatch_legacy / overgeneration_legacy
+# only; no effect on the gated/targeted/preferred variants)
 SYNC=0
 
-# Optional: override the Type 2.1 input for 1.1 / 1.2 generation.
+# Optional: override the undergeneration input for answer_mismatch_gated /
+# answer_mismatch_targeted generation.
 # Leave empty to use the default <out-dir>/type2_1_output.json.
 # Set to the filtered subset to avoid re-running already-done records, e.g.:
 #   TYPE2_1_PATH="$SCRIPT_DIR/type1_2_input.json"
 TYPE2_1_PATH=""
 # ── END CONFIG ────────────────────────────────────────────────────────────────
 
-# Default: all three preferred types (2.1 must precede 1.1)
-TYPES="${@:-2.1 1.1 3.1}"
+# Default: all three preferred types (undergeneration must precede answer_mismatch_gated)
+TYPES="${@:-undergeneration answer_mismatch_gated overgeneration}"
 
 EXTRA=""
 [ "$SYNC"  = "1" ] && EXTRA="$EXTRA --sync"

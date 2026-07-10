@@ -1,26 +1,33 @@
 """
 Singlehop generation entry point.
 
-Supports six generation types:
+Supports seven generation types:
 
-  2    — flat leaf deletion (no LLM)
-  2.1  — cascade deletion (no LLM, cleaner spans)
-  1    — schema-based hallucination via vLLM guided decoding
-  1.1  — schema-based hallucination + Type 2.1 span matching
-         (only generates for rows that passed Type 2.1; needs 2.1 output first)
-  3    — tool-constrained overgeneration via vLLM
-  3.1  — overgeneration with filler filtering + comment validation (cleaner)
+  undergeneration_legacy    — flat leaf deletion (no LLM)
+  undergeneration           — cascade deletion (no LLM, cleaner spans) [preferred]
+  answer_mismatch_legacy    — schema-based hallucination via vLLM guided decoding
+  answer_mismatch_gated     — schema-based hallucination + undergeneration span matching
+                              (only generates for rows that passed undergeneration;
+                              needs undergeneration output first)
+  answer_mismatch_targeted  — span-targeted schema hallucination, unlocks only
+                              answer-quoted leaves (preferred over answer_mismatch_gated
+                              — higher yield; needs undergeneration first)
+  overgeneration_legacy     — tool-constrained overgeneration via vLLM
+  overgeneration            — overgeneration with filler filtering + comment
+                              validation (cleaner) [preferred]
 
-By default the async batched path is used for LLM types (1, 1.1, 3, 3.1).
-Pass --sync to fall back to the slow one-row-at-a-time versions (1, 3 only).
+By default the async batched path is used for the LLM-driven types
+(answer_mismatch_legacy/gated/targeted, overgeneration_legacy/overgeneration).
+Pass --sync to fall back to the slow one-row-at-a-time versions
+(answer_mismatch_legacy, overgeneration_legacy only).
 
 Usage:
-    python3 generate.py                          # async, types 2.1 1.1 3.1
-    python3 generate.py --types 2.1 3.1          # skip 1.1
-    python3 generate.py --types 1 2 3            # legacy types
-    python3 generate.py --types 2.1 1.1          # 2.1 then 1.1 in one run
-    python3 generate.py --sync --types 1 3       # sync path (legacy)
-    python3 generate.py --fresh                  # delete existing outputs first
+    python3 generate.py                                                    # async, default types
+    python3 generate.py --types undergeneration overgeneration             # skip answer-mismatch
+    python3 generate.py --types answer_mismatch_legacy undergeneration_legacy overgeneration_legacy  # legacy types
+    python3 generate.py --types undergeneration answer_mismatch_gated      # undergeneration then gated answer-mismatch
+    python3 generate.py --sync --types answer_mismatch_legacy overgeneration_legacy  # sync path (legacy)
+    python3 generate.py --fresh                                            # delete existing outputs first
 """
 import json
 import argparse
@@ -35,8 +42,23 @@ from openai import OpenAI, AsyncOpenAI
 import httpx
 from hallucination_auto import HallucinationAuto
 
-VALID_TYPES = ["1", "2", "2.1", "3", "1.1", "1.2", "3.1"]
-DEFAULT_TYPES = ["2.1", "1.1", "3.1"]
+# Word names are the canonical CLI interface. Each maps to the internal
+# numeric type key used throughout this file and the rest of the pipeline.
+#   answer_mismatch_legacy / _gated / _targeted → Type 1 / 1.1 / 1.2
+#   undergeneration_legacy / undergeneration     → Type 2 / 2.1 (preferred)
+#   overgeneration_legacy / overgeneration       → Type 3 / 3.1 (preferred)
+WORD_ALIASES = {
+    "answer_mismatch_legacy":    "1",
+    "answer_mismatch_gated":     "1.1",
+    "answer_mismatch_targeted":  "1.2",
+    "undergeneration_legacy":    "2",
+    "undergeneration":           "2.1",
+    "overgeneration_legacy":     "3",
+    "overgeneration":            "3.1",
+}
+VALID_TYPES = list(WORD_ALIASES)
+DEFAULT_TYPES = ["undergeneration", "answer_mismatch_gated", "overgeneration"]
+NUMERIC_TO_WORD = {v: k for k, v in WORD_ALIASES.items()}  # for display only
 
 # Maps type key → output filename (no extension)
 OUTPUT_NAMES = {
@@ -48,6 +70,22 @@ OUTPUT_NAMES = {
     "1.2": "type1_2_output",
     "3.1": "type3_1_output",
 }
+
+
+def _type_arg(value: str) -> str:
+    """Normalize a --types entry to its internal numeric key.
+
+    Accepts either the word name (e.g. "undergeneration") or, for backward
+    compatibility, the legacy numeric key (e.g. "2.1") directly.
+    """
+    if value in WORD_ALIASES:
+        return WORD_ALIASES[value]
+    if value in OUTPUT_NAMES:  # legacy numeric key, still accepted
+        return value
+    raise argparse.ArgumentTypeError(
+        f"invalid type {value!r}. Choices: {', '.join(VALID_TYPES)} "
+        f"(legacy numeric keys {', '.join(OUTPUT_NAMES)} also accepted)"
+    )
 
 
 def get_args():
@@ -64,8 +102,8 @@ def get_args():
         "--type2-1-path",
         default=None,
         help=(
-            "Override the Type 2.1 input file for 1.1 / 1.2 generation. "
-            "Defaults to <out-dir>/type2_1_output.json. "
+            "Override the undergeneration input file for answer_mismatch_gated / "
+            "answer_mismatch_targeted generation. Defaults to <out-dir>/type2_1_output.json. "
             "Use this to pass a pre-filtered subset (e.g. type1_2_input.json)."
         ),
     )
@@ -74,13 +112,14 @@ def get_args():
     p.add_argument("--model",      default="Qwen/Qwen2.5-14B-Instruct",  help="Model name")
     p.add_argument("--timeout",    type=float, default=300.0,             help="Request timeout (s)")
     p.add_argument(
-        "--types", nargs="+", default=DEFAULT_TYPES,
-        choices=VALID_TYPES,
+        "--types", nargs="+", type=_type_arg,
+        default=[WORD_ALIASES[t] for t in DEFAULT_TYPES],
         metavar="TYPE",
         help=(
             f"Which types to generate. Choices: {', '.join(VALID_TYPES)}. "
             f"Default: {' '.join(DEFAULT_TYPES)}. "
-            "Note: 1.1 requires 2.1 to be run first (or already exist in --out-dir)."
+            "Note: answer_mismatch_gated/answer_mismatch_targeted require "
+            "undergeneration to be run first (or already exist in --out-dir)."
         ),
     )
     p.add_argument(
@@ -90,7 +129,7 @@ def get_args():
     )
     p.add_argument(
         "--sync", action="store_true",
-        help="Disable async mode (one row at a time). Only affects types 1 and 3.",
+        help="Disable async mode (one row at a time). Only affects answer_mismatch_legacy and overgeneration_legacy.",
     )
     p.add_argument(
         "--batch-size", type=int, default=10,
@@ -100,7 +139,8 @@ def get_args():
         "--fresh", action="store_true",
         help=(
             "Delete existing output files for the requested types before starting. "
-            "Does NOT delete the type 2.1 output when only --fresh for 1.1 is set."
+            "Does NOT delete the undergeneration output when only --fresh for "
+            "answer_mismatch_gated is set."
         ),
     )
     return p.parse_args()
@@ -189,23 +229,23 @@ def _unwrap_string_results(dataset: list) -> list:
     return dataset
 
 
-def _check_type_1_x_prereq(out_dir: str, label: str, override: str = None) -> str:
-    """Return path to type 2.1 output, or raise if it doesn't exist.
+def _check_answer_mismatch_prereq(out_dir: str, label: str, override: str = None) -> str:
+    """Return path to the undergeneration output, or raise if it doesn't exist.
 
     If *override* is given, uses that path instead of the default.
     """
     p = Path(override) if override else Path(_out(out_dir, "2.1"))
     if not p.exists() or p.stat().st_size == 0:
         raise SystemExit(
-            f"\n  [{label}] Type {label} requires Type 2.1 output at:\n"
+            f"\n  [{label}] {label} requires undergeneration output at:\n"
             f"        {p}\n"
-            f"  Run with --types 2.1 first, or pass --type2-1-path."
+            f"  Run with --types undergeneration first, or pass --type2-1-path."
         )
     return str(p)
 
 
-def _check_type_1_1_prereq(out_dir: str, override: str = None) -> str:
-    return _check_type_1_x_prereq(out_dir, "1.1", override)
+def _check_answer_mismatch_gated_prereq(out_dir: str, override: str = None) -> str:
+    return _check_answer_mismatch_prereq(out_dir, "answer_mismatch_gated", override)
 
 
 def run_sync(args, dataset, ha, out):
@@ -218,27 +258,27 @@ def run_sync(args, dataset, ha, out):
 
     if "2" in args.types:
         print("\n" + "=" * 60)
-        print("TYPE 2 — flat deletion (no LLM)")
+        print("UNDERGENERATION_LEGACY — flat deletion (no LLM)")
         print("=" * 60)
         ha.generate_type2_dataset(dataset, output_path=_out(out, "2"))
 
     if "2.1" in args.types:
         print("\n" + "=" * 60)
-        print("TYPE 2.1 — cascade deletion (no LLM)")
+        print("UNDERGENERATION — cascade deletion (no LLM)")
         print("=" * 60)
         ha.generate_type2_1_dataset(dataset, output_path=_out(out, "2.1"))
 
     if "1" in args.types:
         print("\n" + "=" * 60)
-        print("TYPE 1 — schema-based hallucination (sync)")
+        print("ANSWER_MISMATCH_LEGACY — schema-based hallucination (sync)")
         print("=" * 60)
-        ha.generate_type1_dataset(
+        ha.generate_answer_mismatch_dataset(
             client, args.model, dataset, output_path=_out(out, "1"),
         )
 
     if "3" in args.types:
         print("\n" + "=" * 60)
-        print("TYPE 3 — tool-constrained overgeneration (sync)")
+        print("OVERGENERATION_LEGACY — tool-constrained overgeneration (sync)")
         print("=" * 60)
         ha.generate_type3_dataset(
             client, args.model, dataset, output_path=_out(out, "3"),
@@ -246,7 +286,7 @@ def run_sync(args, dataset, ha, out):
 
     for t in ("1.1", "3.1"):
         if t in args.types:
-            print(f"\n  [WARNING] --sync does not support type {t}; use async mode.")
+            print(f"\n  [WARNING] --sync does not support type {NUMERIC_TO_WORD.get(t, t)}; use async mode.")
 
 
 async def run_async(args, dataset, ha, out):
@@ -261,13 +301,13 @@ async def run_async(args, dataset, ha, out):
 
     if "2" in args.types:
         print("\n" + "=" * 60)
-        print("TYPE 2 — flat deletion (no LLM)")
+        print("UNDERGENERATION_LEGACY — flat deletion (no LLM)")
         print("=" * 60)
         ha.generate_type2_dataset(dataset, output_path=_out(out, "2"))
 
     if "2.1" in args.types:
         print("\n" + "=" * 60)
-        print("TYPE 2.1 — cascade deletion (no LLM, cleaner spans)")
+        print("UNDERGENERATION — cascade deletion (no LLM, cleaner spans)")
         print("=" * 60)
         ha.generate_type2_1_dataset(dataset, output_path=_out(out, "2.1"))
 
@@ -275,21 +315,21 @@ async def run_async(args, dataset, ha, out):
 
     if "1" in args.types:
         print("\n" + "=" * 60)
-        print(f"TYPE 1 — schema-based hallucination (async, batch={args.batch_size})")
+        print(f"ANSWER_MISMATCH_LEGACY — schema-based hallucination (async, batch={args.batch_size})")
         print("=" * 60)
-        await ha.generate_type1_dataset_async(
+        await ha.generate_answer_mismatch_dataset_async(
             client, args.model, dataset,
             output_path=_out(out, "1"),
             batch_size=args.batch_size,
         )
 
     if "1.1" in args.types:
-        t21_path = _check_type_1_1_prereq(out, getattr(args, "type2_1_path", None))
+        t21_path = _check_answer_mismatch_gated_prereq(out, getattr(args, "type2_1_path", None))
         print("\n" + "=" * 60)
-        print(f"TYPE 1.1 — schema hallucination + T2.1 spans (async, batch={args.batch_size})")
-        print(f"           reading Type 2.1 gate from: {t21_path}")
+        print(f"ANSWER_MISMATCH_GATED — schema hallucination + undergeneration spans (async, batch={args.batch_size})")
+        print(f"           reading undergeneration gate from: {t21_path}")
         print("=" * 60)
-        await ha.generate_type1_1_dataset_async(
+        await ha.generate_answer_mismatch_gated_dataset_async(
             client, args.model,
             type2_1_output_path=t21_path,
             output_path=_out(out, "1.1"),
@@ -297,12 +337,12 @@ async def run_async(args, dataset, ha, out):
         )
 
     if "1.2" in args.types:
-        t21_path = _check_type_1_x_prereq(out, "1.2", getattr(args, "type2_1_path", None))
+        t21_path = _check_answer_mismatch_prereq(out, "answer_mismatch_targeted", getattr(args, "type2_1_path", None))
         print("\n" + "=" * 60)
-        print(f"TYPE 1.2 — span-targeted schema hallucination (async, batch={args.batch_size})")
-        print(f"           reading Type 2.1 gate from: {t21_path}")
+        print(f"ANSWER_MISMATCH_TARGETED — span-targeted schema hallucination (async, batch={args.batch_size})")
+        print(f"           reading undergeneration gate from: {t21_path}")
         print("=" * 60)
-        await ha.generate_type1_2_dataset_async(
+        await ha.generate_answer_mismatch_targeted_dataset_async(
             client, args.model,
             type2_1_output_path=t21_path,
             output_path=_out(out, "1.2"),
@@ -311,7 +351,7 @@ async def run_async(args, dataset, ha, out):
 
     if "3" in args.types:
         print("\n" + "=" * 60)
-        print(f"TYPE 3 — tool overgeneration (async, batch={args.batch_size})")
+        print(f"OVERGENERATION_LEGACY — tool overgeneration (async, batch={args.batch_size})")
         print("=" * 60)
         await ha.generate_type3_dataset_async(
             client, args.model, dataset,
@@ -321,7 +361,7 @@ async def run_async(args, dataset, ha, out):
 
     if "3.1" in args.types:
         print("\n" + "=" * 60)
-        print(f"TYPE 3.1 — overgeneration + quality gates (async, batch={args.batch_size})")
+        print(f"OVERGENERATION — overgeneration + quality gates (async, batch={args.batch_size})")
         print("=" * 60)
         await ha.generate_type3_1_dataset_async(
             client, args.model, dataset,
@@ -336,7 +376,7 @@ def main():
     # ── Validate type ordering: 1.1 needs 2.1 to appear before it ─────────────
     if "1.1" in args.types and "2.1" not in args.types:
         # 2.1 must already exist from a prior run
-        pass  # _check_type_1_1_prereq() will catch it at runtime
+        pass  # _check_answer_mismatch_gated_prereq() will catch it at runtime
 
     with open(args.dataset) as f:
         dataset = json.load(f)
@@ -361,7 +401,7 @@ def main():
                     os.remove(skipped)
                     print(f"  [fresh] removed {skipped}")
 
-    print(f"\nTypes to run : {' '.join(args.types)}")
+    print(f"\nTypes to run : {' '.join(NUMERIC_TO_WORD.get(t, t) for t in args.types)}")
     print(f"Out dir      : {out}")
     print(f"Server       : {args.base_url}")
     print(f"Model        : {args.model}")

@@ -9,22 +9,31 @@ pipeline produces is written under `output/` (created automatically).
 
 ## Hallucination types
 
-Singlehop generation (`generate.py`) supports two generations of types. **Use the
-`.1`/`.2` variants below — they are the current, bug-fixed set** (`error/fixed/`
-audits removed malformed rows from the legacy `1`/`2` outputs; `.1`/`.2` supersede
-them). The legacy flat types `1`/`2`/`3` still exist in the code (kept for
-compatibility / historical runs) but should not be used for new generation.
+Type names follow the paper's taxonomy: **Answer Mismatch** (answer contradicts
+the tool response), **Undergeneration** (answer omits required tool info),
+**Overgeneration** (answer adds unsupported content). ("Missing Tool" and
+"Correct" are the other two paper classes; this pipeline doesn't generate
+"Missing Tool" data.)
 
-| Type | Name | LLM needed | Status |
-|------|------|-----------|--------|
-| **2.1** | Undergeneration — cascade field deletion | No | ✅ current default |
-| **1.2** | Incorrect Info — span-targeted schema hallucination | Yes (vLLM) | ✅ preferred over 1.1 (higher yield), needs 2.1 first |
-| **3.1** | Overgeneration — filler-filtered spurious sentence | Yes (vLLM) | ✅ current default |
-Multihop/pruning generation (`generate_multihop.py`, `run_multihop.sh`) has **not**
-been migrated to the new type scheme yet — it only produces the legacy flat types
-`1`/`2`/`3` (schema corruption / field deletion / overgeneration on multi-turn
-pruned dialogues). Included here for completeness, but treat it as the
-not-yet-redacted part of the pipeline.
+Singlehop generation (`generate.py`, `run.sh`) takes these as `--types` values.
+**Use the preferred variants below** — the `_legacy` variants exist for
+backward compatibility / historical runs but should not be used for new
+generation (audits removed malformed rows from their output; the preferred
+variants supersede them).
+
+| Type | LLM needed | Status |
+|------|-----------|--------|
+| `undergeneration` | No | ✅ preferred, current default |
+| `answer_mismatch_gated` | Yes (vLLM) | ✅ works, needs `undergeneration` output first |
+| `answer_mismatch_targeted` | Yes (vLLM) | ✅ preferred over `answer_mismatch_gated` (higher yield), needs `undergeneration` first |
+| `overgeneration` | Yes (vLLM) | ✅ preferred, current default |
+| `answer_mismatch_legacy` / `undergeneration_legacy` / `overgeneration_legacy` | Yes/No | ⚠️ superseded, do not use for new data |
+
+Multihop/pruning generation (`generate_multihop.py`, `run_multihop.sh`) only
+implements one (legacy) variant per class — `answer_mismatch`, `undergeneration`,
+`overgeneration` — there's no gated/targeted refinement there yet. Included
+here for completeness, but treat it as the not-yet-redacted part of the
+pipeline.
 
 ## 1. Install deps
 
@@ -32,9 +41,9 @@ not-yet-redacted part of the pipeline.
 python3 -m pip install -r requirements.txt
 ```
 
-For the LLM-driven types (1.1, 1.2, 3.1, and legacy 1/3) you also need a running
-**vLLM** server (OpenAI-compatible API) — see [Server config](#server-config) below.
-Type 2.1 (and legacy 2) never call an LLM.
+For the LLM-driven types (`answer_mismatch_*`, `overgeneration*`) you also need
+a running **vLLM** server (OpenAI-compatible API) — see
+[Server config](#server-config) below. `undergeneration*` never calls an LLM.
 
 ## 2. Create env
 
@@ -65,13 +74,14 @@ rows in RAGTruth schema: `id, query, context, output, hallucination_labels, ...`
 
 ## 5. Generate Hallucinations
 
-**Singlehop** (preferred types, in order — 2.1 must run before 1.1/1.2):
+**Singlehop** (preferred types, in order — `undergeneration` must run before
+`answer_mismatch_gated`/`answer_mismatch_targeted`):
 
 ```bash
-./run.sh                      # default: 2.1, 1.1, 3.1
-./run.sh 2.1 1.2 3.1          # use 1.2 instead of 1.1 (recommended — higher yield)
-./run.sh 2.1                  # just cascade deletion, no vLLM server needed
-FRESH=1 ./run.sh 3.1          # wipe existing type 3.1 output and regenerate
+./run.sh                                                          # default: undergeneration, answer_mismatch_gated, overgeneration
+./run.sh undergeneration answer_mismatch_targeted overgeneration  # use targeted (recommended — higher yield)
+./run.sh undergeneration                                          # just cascade deletion, no vLLM server needed
+FRESH=1 ./run.sh overgeneration                                   # wipe existing overgeneration output and regenerate
 ```
 
 Edit the `CONFIG` block at the top of `run.sh` to point `BASE_URL`/`MODEL` at your
@@ -80,8 +90,8 @@ vLLM server. Writes to `output/singlehop_new/`.
 **Multihop** (legacy types only):
 
 ```bash
-./run_multihop.sh          # types 1, 2, 3
-./run_multihop.sh 2        # type 2 only, no server needed
+./run_multihop.sh                                    # all 3 types
+./run_multihop.sh undergeneration                    # undergeneration only, no server needed
 ```
 
 Writes to `output/pruneddataset/`.
@@ -89,7 +99,7 @@ Writes to `output/pruneddataset/`.
 ## 6. Dataset (post-processing)
 
 ```bash
-# Collect singlehop (2.1/1.2/3.1) + multihop (1/2/3) into canonical final_dataset/
+# Collect singlehop + multihop output into canonical final_dataset/
 python3 collect_final.py
 
 # Merge all splits into one deduplicated JSONL
@@ -120,7 +130,7 @@ data/*.json ──► run.sh / run_multihop.sh ──► output/singlehop_new/, 
 ## Validate before calling it done
 
 ```bash
-python3 test_output.py            # checks label offsets, type3 span position, no leftover <hall> tags
+python3 test_output.py            # checks label offsets, overgeneration span position, no leftover <hall> tags
 python3 test_output.py -v         # verbose per-row failures
 ```
 
@@ -134,7 +144,7 @@ MODEL="Qwen/Qwen2.5-14B-Instruct"
 BATCH_SIZE=50                           # concurrent async requests
 ```
 
-Type 2.1 (and legacy type 2) never call the LLM and ignore these settings.
+`undergeneration`/`undergeneration_legacy` never call the LLM and ignore these settings.
 
 ## Files
 
@@ -145,8 +155,8 @@ Type 2.1 (and legacy type 2) never call the LLM and ignore these settings.
 | `generate.py` | CLI driving singlehop generation |
 | `generate_multihop.py` | CLI driving multihop generation |
 | `hallucination_auto.py` | Assembles all mixins into `HallucinationAuto` |
-| `schema.py` | JSON schema tools, locked schema, cascade/focused masking (Type 1.x backbone) |
-| `singlehop.py` | Type 1/1.1/1.2/2/2.1/3/3.1 logic for single-turn QA |
+| `schema.py` | JSON schema tools, locked schema, cascade/focused masking (Answer Mismatch backbone) |
+| `singlehop.py` | Answer Mismatch, Undergeneration, Overgeneration logic for single-turn QA |
 | `multihop.py` | Multistep injection + pruning-based generation (legacy types only) |
 | `export.py` | Convert generated data → RAGTruth JSONL format |
 | `build_toolace_clean_ragtruth.py` | ToolACE → RAGTruth clean-row conversion |
@@ -161,7 +171,23 @@ Russian/Glaive-RU branch were dropped as out of scope for the main pipeline.
 
 ## Known-fixed bugs (do not reintroduce)
 
+- `collect_final.py`, `merge_dataset.py`, `make_lettucedetect_data.py`, and
+  `test_output.py` previously pointed at a `last dub/` directory that no longer
+  exists and/or legacy `type1/type2/type3` filenames that don't match what
+  `generate.py` actually produces (`type2_1_output.jsonl`, `type1_2_output.jsonl`,
+  `type3_1_output.jsonl`). Fixed here to read from `output/singlehop_new/` and
+  `output/pruneddataset/` with the correct filenames.
+- Word-boundary-only span matching in `undergeneration` — never match substrings
+  (e.g. `18` must not match inside `1840`).
+- `answer_mismatch_gated`/`answer_mismatch_targeted` require `undergeneration`
+  output to exist first (`generate.py` enforces this).
 
-- Word-boundary-only span matching in Type 2.1 — never match substrings (e.g. `18`
-  must not match inside `1840`).
-- Type 1.1/1.2 require Type 2.1 output to exist first (`generate.py` enforces this).
+## CLI reference note
+
+`--types` accepts the word names above as the canonical interface
+(`generate.py --types undergeneration answer_mismatch_targeted overgeneration`).
+The old numeric keys (`1`, `1.1`, `1.2`, `2`, `2.1`, `3`, `3.1`) still work too,
+for anything that scripted against the previous interface — see
+`WORD_ALIASES` in `generate.py` / `generate_multihop.py` for the full mapping.
+Internally, and in the actual output filenames on disk (e.g. `type2_1_output.json`),
+the numeric keys are still used — only the human-facing CLI/docs surface changed.

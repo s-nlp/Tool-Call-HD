@@ -165,7 +165,7 @@ class ExportMixin:
             "due_to_null": due_to_null,
         }
 
-    def _ragtruth_labels_type1(self, item: dict, clean_output: str) -> tuple:
+    def _ragtruth_labels_answer_mismatch(self, item: dict, clean_output: str) -> tuple:
         """Extract RAGTruth labels from Type 1 eval_spans (schema corruption).
 
         Post-processing applied to each label:
@@ -173,7 +173,7 @@ class ExportMixin:
         - Drop FPs: value unchanged in corrupted context (leaf-value exact match)
         - Add all other case-insensitive occurrences of the same value
 
-        Falls back to detect_type1_spans when no valid label remains.
+        Falls back to detect_answer_mismatch_spans when no valid label remains.
         """
         out_lower = clean_output.lower()
 
@@ -333,14 +333,14 @@ class ExportMixin:
                         evident_conflict += 1
                     start = idx + 1
 
-        # Fall back to detect_type1_spans when nothing found.
+        # Fall back to detect_answer_mismatch_spans when nothing found.
         # Use span positions directly — they are already in `plain` coordinates.
         # Do NOT pass through _full_word (which closes over clean_output, a
         # different text) as that would corrupt the offsets.
         plain_override = None
         if not labels:
             try:
-                spans, plain = self.detect_type1_spans(item)
+                spans, plain = self.detect_answer_mismatch_spans(item)
                 if spans:
                     plain_override = plain
                     for s in spans:
@@ -673,11 +673,11 @@ class ExportMixin:
           - 'system'        — tool list / instructions
           - 'conversations' — list of {from, value} turns; the last assistant
                               answer carries <hall>...</hall> spans
-          - 'hallucination_type' — "type1" / "type2" / "type3"
+          - 'hallucination_type' — "type1" (Answer Mismatch) / "type2" (Undergeneration) / "type3" (Overgeneration)
 
         For RAGTruth:
           - query    = last user prompt before the hallucinated answer
-          - context  = last tool turn value (corrupted for type1/2, original for type3)
+          - context  = last tool turn value (corrupted for Answer Mismatch/Undergeneration, original for Overgeneration)
           - output   = last assistant answer with <hall> tags stripped
           - labels   = char offsets of stripped <hall> spans
           - input_str = full dialogue history up to (but not including) the answer
@@ -879,7 +879,7 @@ class ExportMixin:
 
             hall_spans = sorted(extended, key=lambda t: t[0])
 
-        # For type1: false-positive filter + partial-word expansion + all occurrences.
+        # For type1 (Answer Mismatch): false-positive filter + partial-word expansion + all occurrences.
         # The context here is the CORRUPTED tool response.  If the original value
         # (span text) appears in the corrupted context as a whole word, the field
         # wasn't actually changed → the model didn't hallucinate → drop the span.
@@ -894,7 +894,7 @@ class ExportMixin:
                 return bool(re.search(
                     r'\b' + re.escape(val.lower()) + r'\b', ctx_lower))
 
-            def _full_word_t1(text, s, e):
+            def _full_word_am(text, s, e):
                 while s > 0 and text[s - 1].isalpha():
                     s -= 1
                 while e < len(text) and text[e].isalpha():
@@ -929,7 +929,7 @@ class ExportMixin:
                     if len(txt) > 2 and _fp_in_ctx(txt):
                         continue
                     # Expand partial-word matches to the full word
-                    fs, fe, ftxt = _full_word_t1(clean_output, s, e)
+                    fs, fe, ftxt = _full_word_am(clean_output, s, e)
                     if not any(es < fe and fs < ee for es, ee, _ in extended):
                         extended.append((fs, fe, ftxt))
                     # Find all other occurrences in the answer (case-insensitive)
@@ -954,7 +954,7 @@ class ExportMixin:
             "type2": "Evident Baseless Info",
             "type3": "Overgeneration",
         }
-        # Normalize: "type3_tool_overgen" → "type3", "type1_smart" → "type1", etc.
+        # Normalize: "type3_tool_overgen" → "type3", "type1_smart" → "type1" (Answer Mismatch), etc.
         label_type = label_type_map.get(h_type_base, label_type_map.get(h_type, "Evident Conflict"))
         labels = [
             {
@@ -1021,7 +1021,7 @@ class ExportMixin:
 
         h_type = item.get("hallucination_type", "")
         is_overgen = h_type in ("type2_overgen", "type3_tool_overgen", "type3_1")
-        is_type1 = h_type.startswith("type1_")
+        is_answer_mismatch = h_type.startswith("type1_")
 
         if is_overgen:
             clean_output = item.get("overgenerated_answer", item.get("original_answer", ""))
@@ -1034,11 +1034,12 @@ class ExportMixin:
         else:
             clean_output = item.get("original_answer", "")
 
-        if is_type1:
+        if is_answer_mismatch:
             context = item.get("hallucinated_tool_response", item.get("tool_response", ""))
-            # type1_1 / type1_2 store pre-computed labels from _t21_find_spans.
-            # Use them directly — re-running _ragtruth_labels_type1 falls back to
-            # detect_type1_spans which produces implicit whole-answer spans.
+            # type1_1 / type1_2 (Answer Mismatch gated/targeted variants) store
+            # pre-computed labels from _t21_find_spans.
+            # Use them directly — re-running _ragtruth_labels_answer_mismatch falls back to
+            # detect_answer_mismatch_spans which produces implicit whole-answer spans.
             precomputed = item.get("hallucination_labels")
             if precomputed and isinstance(precomputed, list):
                 plain_override = item.get("plain_answer") or None
@@ -1064,7 +1065,7 @@ class ExportMixin:
                     "baseless_info": 0,
                 }
             else:
-                labels, summary, plain_override = self._ragtruth_labels_type1(item, clean_output)
+                labels, summary, plain_override = self._ragtruth_labels_answer_mismatch(item, clean_output)
         elif h_type == "type2_deletion":
             # Use reduced_tool_response (after deletion) so the answer's
             # references to deleted fields are unsupported by the context
