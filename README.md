@@ -51,6 +51,9 @@ Our best released LettuceDetect-style checkpoint is:
 
 - [`s-nlp/tool-calling-hallucination-modernbert-base-unified-final`](https://huggingface.co/s-nlp/tool-calling-hallucination-modernbert-base-unified-final)
 
+Both Qwen 3.5 0.8B and 2B available at:
+- [`s-nlp/tool-calling-hallucination-detection`](https://huggingface.co/collections/s-nlp/tool-calling-hallucination-detection)
+
 The unified ToolHACE evaluation scripts in this repository default to the Hugging Face dataset:
 
 - [`s-nlp/toolace-unified-hallucinations_upd_v2`](https://huggingface.co/datasets/s-nlp/toolace-unified-hallucinations_upd_v2)

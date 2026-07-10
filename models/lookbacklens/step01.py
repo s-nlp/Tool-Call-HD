@@ -23,7 +23,7 @@ from tqdm import tqdm
 import argparse
 import tiktoken
 import gc
-from generation import LLM
+from models.lookbacklens.generation import LLM
 
 transformers.logging.set_verbosity(40)
 
