@@ -47,7 +47,11 @@ Together these results highlight the need for dedicated benchmarks and models fo
 
 ## Best Released ToolHACE Model
 
-Our best released LettuceDetect-style checkpoint is:
+Our best released checkpoint (ModernBERT-large + linear-chain CRF, uniform soup of decorrelated students — char F1 0.99 / span F1 0.885 @ IoU≥0.75 on `toolace-unified-hallucinations` test) is:
+
+- [`s-nlp/tool-calling-hallucination-modernbert-large-crf-best`](https://huggingface.co/s-nlp/tool-calling-hallucination-modernbert-large-crf-best) *(private)*
+
+LettuceDetect-style ModernBERT-base baseline:
 
 - [`s-nlp/tool-calling-hallucination-modernbert-base-unified-final`](https://huggingface.co/s-nlp/tool-calling-hallucination-modernbert-base-unified-final)
 
