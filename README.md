@@ -62,6 +62,13 @@ The unified ToolHACE evaluation scripts in this repository default to the Huggin
 
 - [`s-nlp/toolace-unified-hallucinations_upd_v2`](https://huggingface.co/datasets/s-nlp/toolace-unified-hallucinations_upd_v2)
 
+### Results per-model
+
+| model | CharF1 | Span F1 (IoU≥0.75) | Span P | Span R |
+|-------|--------|--------------------|--------|--------|
+| `s-nlp/tool-calling-hallucination-modernbert-base-unified-final` | 0.9837 | 0.8425 | 0.846 | 0.839 |
+| `s-nlp/tool-calling-hallucination-modernbert-large-crf-best` | 0.9915 | 0.8854 | 0.915 | 0.858 |
+
 ## Run The Best Model
 
 Install the core dependencies:
@@ -86,6 +93,31 @@ python evaluate/evaluate_save.py \
 To run the model over new, unlabeled data instead, use
 `lettucedetect/inference/predict_spans.py` (see
 `lettucedetect/inference/README.md`).
+
+## Model Card — `s-nlp/tool-calling-hallucination-modernbert-large-crf-best`
+
+ModernBERT-large + linear-chain CRF (uniform soup) for character-level hallucination span detection in tool-calling LLM answers → returns char spans of the answer **not grounded** by the tool context. [HF model](https://huggingface.co/s-nlp/tool-calling-hallucination-modernbert-large-crf-best) *(private, `s-nlp` org)*.
+
+> **Decode with CRF Viterbi, not plain argmax** (plain argmax gives the weaker large-argmax quality). The repo ships `crf.safetensors` + `crf.py` + a CRF-aware `transformer.py` (drop-in for `lettucedetect/detectors/transformer.py`); calibrated `bias=-0.5`, `min_span=3`.
+
+### Run (LettuceDetect — drop-in)
+
+```bash
+pip install lettucedetect transformers torch safetensors huggingface_hub
+export HF_TOKEN=<your s-nlp token>   # private repo
+LETTUCE=$(python -c "import lettucedetect,os;print(os.path.dirname(lettucedetect.__file__))")
+cp "$(python -c "from huggingface_hub import hf_hub_download;print(hf_hub_download('s-nlp/tool-calling-hallucination-modernbert-large-crf-best','transformer.py'))")" \
+   "$LETTUCE/detectors/transformer.py"
+```
+
+```python
+from lettucedetect.models.inference import HallucinationDetector
+det = HallucinationDetector(method="transformer",
+                            model_path="s-nlp/tool-calling-hallucination-modernbert-large-crf-best")
+# logs: [CRF] loaded .../crf.safetensors -> Viterbi decode (bias=-0.5, min_span=3)
+spans = det.predict(context=[tool_result], answer=final_answer,
+                    question=user_query, output_format="spans")
+```
 
 ## Train On ToolHACE
 
@@ -204,31 +236,6 @@ python lookbacklens/form_preds_LBL.py \
 ```
 
 ---
-
-## Model Card — `s-nlp/tool-calling-hallucination-modernbert-large-crf-best`
-
-ModernBERT-large + linear-chain CRF (uniform soup) for character-level hallucination span detection in tool-calling LLM answers → returns char spans of the answer **not grounded** by the tool context. [HF model](https://huggingface.co/s-nlp/tool-calling-hallucination-modernbert-large-crf-best) *(private, `s-nlp` org)*.
-
-> **Decode with CRF Viterbi, not plain argmax** (plain argmax gives the weaker large-argmax quality). The repo ships `crf.safetensors` + `crf.py` + a CRF-aware `transformer.py` (drop-in for `lettucedetect/detectors/transformer.py`); calibrated `bias=-0.5`, `min_span=3`.
-
-### Run (LettuceDetect — drop-in)
-
-```bash
-pip install lettucedetect transformers torch safetensors huggingface_hub
-export HF_TOKEN=<your s-nlp token>   # private repo
-LETTUCE=$(python -c "import lettucedetect,os;print(os.path.dirname(lettucedetect.__file__))")
-cp "$(python -c "from huggingface_hub import hf_hub_download;print(hf_hub_download('s-nlp/tool-calling-hallucination-modernbert-large-crf-best','transformer.py'))")" \
-   "$LETTUCE/detectors/transformer.py"
-```
-
-```python
-from lettucedetect.models.inference import HallucinationDetector
-det = HallucinationDetector(method="transformer",
-                            model_path="s-nlp/tool-calling-hallucination-modernbert-large-crf-best")
-# logs: [CRF] loaded .../crf.safetensors -> Viterbi decode (bias=-0.5, min_span=3)
-spans = det.predict(context=[tool_result], answer=final_answer,
-                    question=user_query, output_format="spans")
-```
 
 A standalone snippet (no LettuceDetect) and full results / soup ingredients / evaluation protocol are on the [HF model card](https://huggingface.co/s-nlp/tool-calling-hallucination-modernbert-large-crf-best).
 
