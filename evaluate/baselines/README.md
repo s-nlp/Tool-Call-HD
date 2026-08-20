@@ -3,7 +3,7 @@
 Install the inference dependencies once:
 
 ```bash
-python3 -m pip install lettucedetect datasets torch transformers tqdm
+python3 -m pip install lettucedetect datasets huggingface_hub pyarrow torch transformers tqdm
 ```
 
 Run a Hugging Face or local checkpoint on the `test` split:
@@ -15,8 +15,10 @@ python evaluate/baselines/infer_lettucedetect.py \
 ```
 
 For a private model or dataset, set `HF_TOKEN` or pass `--hf-token`. The
-script downloads `s-nlp/toolHACE` itself; the output JSONL stores gold labels
-and spans along with every prediction.
+script downloads the split parquet from `s-nlp/toolHACE` itself and reads it
+directly with PyArrow, which avoids a compatibility issue in some older
+`datasets` versions; the output JSONL stores gold labels and spans along with
+every prediction.
 
 Compute metrics without loading ToolHACE again:
 

@@ -188,14 +188,62 @@ def _import_load_dataset():
 
 
 def load_test_rows(dataset_name: str, split: str, token: str | None, cache_dir: str | None) -> list[dict[str, Any]]:
-    load_dataset = _import_load_dataset()
-    kwargs: dict[str, Any] = {"split": split}
-    if token:
-        kwargs["token"] = token
-    if cache_dir:
-        kwargs["cache_dir"] = cache_dir
-    dataset = load_dataset(dataset_name, **kwargs)
-    return [dict(row) for row in dataset]
+    """Download split parquet files and return plain Python dictionaries.
+
+    ``datasets.load_dataset`` is convenient, but some private parquet repos
+    contain feature metadata that older versions of ``datasets`` cannot
+    reconstruct (for example, they raise ``TypeError: must be called with a
+    dataclass type`` while parsing ``Features``).  Reading the parquet table
+    directly preserves the same rows and avoids that metadata conversion.
+    """
+    try:
+        from huggingface_hub import HfApi, hf_hub_download
+
+        api = HfApi(token=token)
+        files = api.list_repo_files(dataset_name, repo_type="dataset")
+        split_prefix = f"{split.lower()}-"
+        split_files = sorted(
+            filename
+            for filename in files
+            if filename.lower().endswith(".parquet")
+            and Path(filename).name.lower().startswith(split_prefix)
+        )
+        if not split_files:
+            raise FileNotFoundError(
+                f"No parquet files for split={split!r} found in dataset {dataset_name!r}."
+            )
+
+        import pyarrow.parquet as parquet
+
+        rows: list[dict[str, Any]] = []
+        for filename in split_files:
+            local_path = hf_hub_download(
+                repo_id=dataset_name,
+                filename=filename,
+                repo_type="dataset",
+                token=token,
+                cache_dir=cache_dir,
+            )
+            rows.extend(parquet.read_table(local_path).to_pylist())
+        return rows
+    except (ImportError, ModuleNotFoundError, FileNotFoundError, OSError) as direct_error:
+        # Keep a compatibility fallback for datasets/configs that are not
+        # parquet-backed.  The direct path above is used for ToolHACE.
+        try:
+            load_dataset = _import_load_dataset()
+            kwargs: dict[str, Any] = {"split": split}
+            if token:
+                kwargs["token"] = token
+            if cache_dir:
+                kwargs["cache_dir"] = cache_dir
+            dataset = load_dataset(dataset_name, **kwargs)
+            return [dict(row) for row in dataset]
+        except Exception as fallback_error:
+            raise RuntimeError(
+                f"Could not load {dataset_name!r} split {split!r} directly as parquet "
+                "or through datasets.load_dataset. "
+                f"Direct error: {direct_error}. Fallback error: {fallback_error}"
+            ) from fallback_error
 
 
 def _normalise_prediction_span(span: Any, answer: str) -> dict[str, Any] | None:
