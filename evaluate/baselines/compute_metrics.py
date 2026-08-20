@@ -5,21 +5,16 @@ The input is the JSONL produced by ``infer_lettucedetect.py``.  Gold labels
 are read only from that file; the benchmark is never downloaded here.
 
 Response-level scoring is binary because LettuceDetect returns hallucinated
-spans, not one of the five hallucination types:
-
-* ``clean`` / Correct: the response is correct when no span is predicted.
-* every hallucination class: the response is correct when at least one span
-  is predicted.
-
-The class columns in the CSV therefore report the per-gold-class detection
-rate (the clean column is specificity and the other columns are recall).  The
-overall response P/R/F1/accuracy are also included in the JSON summary.
+spans, not one of the five hallucination types.  For the table, each class is
+scored one-vs-rest: ``clean`` means no predicted span and every hallucination
+class means at least one predicted span.  The reported class value is the
+resulting F1, so false positives are included.
 
 Span-level metrics are computed only for the three classes with gold spans:
 ``answer_mismatch``, ``overgeneration`` and ``missing_tool``.  Primary
-``span_f1`` is one-to-one span matching with positive character overlap.  The
-summary additionally contains character-overlap F1, token F1, and exact-match
-rate.
+``span_f1`` is one-to-one span matching performed independently inside each
+answer, with IoU >= 0.75 by default.  The summary additionally contains
+character-overlap F1, token F1, and exact-match rate.
 
 Examples
 --------
@@ -40,6 +35,7 @@ from typing import Any, Iterable
 
 VALID_TYPES = ["clean", "answer_mismatch", "overgeneration", "missing_tool", "undergeneration"]
 SPAN_TYPES = ["answer_mismatch", "overgeneration", "missing_tool"]
+DEFAULT_IOU_THRESHOLD = 0.75
 TYPE_ALIASES = {
     "correct": "clean",
     "clean": "clean",
@@ -189,20 +185,27 @@ def response_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     by_class: dict[str, Any] = {}
     class_scores: list[float] = []
     for label in VALID_TYPES:
-        class_rows = [row for row in rows if row_type(row) == label]
-        decisions = []
-        for row in class_rows:
-            predicted = bool(row_spans(row, "pred_spans")) and row.get("status", "ok") == "ok"
-            decisions.append(predicted if label != "clean" else not predicted)
-        score = sum(decisions) / len(decisions) if decisions else None
-        if score is not None:
-            class_scores.append(score)
-        by_class[label] = {
-            "support": len(class_rows),
-            "correct_decisions": sum(decisions),
-            "detection_rate": score,
-            "metric": "specificity" if label == "clean" else "recall",
-        }
+        tp = fp = fn = 0
+        for row in rows:
+            gold_is_label = row_type(row) == label
+            predicted_hallucination = (
+                bool(row_spans(row, "pred_spans")) and row.get("status", "ok") == "ok"
+            )
+            predicted_is_label = (
+                not predicted_hallucination if label == "clean" else predicted_hallucination
+            )
+            if gold_is_label and predicted_is_label:
+                tp += 1
+            elif not gold_is_label and predicted_is_label:
+                fp += 1
+            elif gold_is_label and not predicted_is_label:
+                fn += 1
+        report = prf(tp, fp, fn)
+        report["support"] = sum(1 for row in rows if row_type(row) == label)
+        report["metric"] = "f1"
+        if report["support"]:
+            class_scores.append(float(report["f1"]))
+        by_class[label] = report
 
     return {
         "overall": binary,
@@ -211,7 +214,17 @@ def response_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def overlap_span_prf(gold: list[dict[str, Any]], pred: list[dict[str, Any]]) -> dict[str, Any]:
+def overlap_span_prf(
+    gold: list[dict[str, Any]],
+    pred: list[dict[str, Any]],
+    iou_threshold: float,
+) -> dict[str, Any]:
+    """One-to-one span P/R/F1 for a single answer.
+
+    A prediction can match at most one gold span.  Matching is intentionally
+    done per row, since offsets are relative to each answer and cannot be
+    compared across examples.
+    """
     matched_gold: set[int] = set()
     tp = fp = 0
     for predicted in pred:
@@ -219,7 +232,16 @@ def overlap_span_prf(gold: list[dict[str, Any]], pred: list[dict[str, Any]]) -> 
         for gold_index, target in enumerate(gold):
             if gold_index in matched_gold:
                 continue
-            if max(predicted["start"], target["start"]) < min(predicted["end"], target["end"]):
+            overlap = max(
+                0,
+                min(predicted["end"], target["end"])
+                - max(predicted["start"], target["start"]),
+            )
+            union = (predicted["end"] - predicted["start"]) + (
+                target["end"] - target["start"]
+            ) - overlap
+            iou = overlap / union if union else 0.0
+            if iou >= iou_threshold:
                 hit = gold_index
                 break
         if hit is None:
@@ -261,11 +283,10 @@ def exact_match(gold: list[dict[str, Any]], pred: list[dict[str, Any]]) -> bool:
     return {(s["start"], s["end"]) for s in gold} == {(s["start"], s["end"]) for s in pred}
 
 
-def span_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def span_metrics(rows: list[dict[str, Any]], iou_threshold: float) -> dict[str, Any]:
     by_class: dict[str, Any] = {}
     class_f1s: list[float] = []
-    all_gold: list[dict[str, Any]] = []
-    all_pred: list[dict[str, Any]] = []
+    pooled_counts = Counter()
 
     for label in SPAN_TYPES:
         class_rows = [row for row in rows if row_type(row) == label]
@@ -274,18 +295,24 @@ def span_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
         char_scores: list[float] = []
         token_scores: list[float] = []
         exact_scores: list[int] = []
+        class_counts = Counter()
         for row in class_rows:
             gold = row_spans(row, "gold_spans")
             pred = row_spans(row, "pred_spans") if row.get("status", "ok") == "ok" else []
             answer = answer_of(row)
+            row_span_metrics = overlap_span_prf(gold, pred, iou_threshold)
+            for key in ("tp", "fp", "fn"):
+                class_counts[key] += row_span_metrics[key]
+                pooled_counts[key] += row_span_metrics[key]
             gold_all.extend(gold)
             pred_all.extend(pred)
             char_scores.append(char_f1(gold, pred, answer))
             token_scores.append(token_f1(gold, pred, answer))
             exact_scores.append(int(exact_match(gold, pred)))
         if class_rows:
-            span_report = overlap_span_prf(gold_all, pred_all)
+            span_report = prf(class_counts["tp"], class_counts["fp"], class_counts["fn"])
             span_report["span_f1"] = span_report["f1"]
+            span_report["iou_threshold"] = iou_threshold
             span_report["char_overlap_f1"] = sum(char_scores) / len(char_scores)
             span_report["token_f1"] = sum(token_scores) / len(token_scores)
             span_report["exact_match_rate"] = sum(exact_scores) / len(exact_scores)
@@ -301,6 +328,7 @@ def span_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "char_overlap_f1": None,
                 "token_f1": None,
                 "exact_match_rate": None,
+                "iou_threshold": iou_threshold,
             }
         span_report["support_rows"] = len(class_rows)
         span_report["gold_spans"] = len(gold_all)
@@ -308,22 +336,20 @@ def span_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
         by_class[label] = span_report
         if span_report["span_f1"] is not None:
             class_f1s.append(float(span_report["span_f1"]))
-        all_gold.extend(gold_all)
-        all_pred.extend(pred_all)
 
-    pooled = overlap_span_prf(all_gold, all_pred)
+    pooled = prf(pooled_counts["tp"], pooled_counts["fp"], pooled_counts["fn"])
     return {
         "by_class": by_class,
         "macro_span_f1": sum(class_f1s) / len(class_f1s) if class_f1s else None,
-        "pooled": {**pooled, "span_f1": pooled["f1"]},
+        "pooled": {**pooled, "span_f1": pooled["f1"], "iou_threshold": iou_threshold},
     }
 
 
-def build_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def build_metrics(rows: list[dict[str, Any]], iou_threshold: float = DEFAULT_IOU_THRESHOLD) -> dict[str, Any]:
     usable_rows = [row for row in rows if row_type(row) in VALID_TYPES]
     statuses = Counter(row.get("status", "ok") for row in usable_rows)
     response = response_metrics(usable_rows)
-    spans = span_metrics(usable_rows)
+    spans = span_metrics(usable_rows, iou_threshold)
     first = usable_rows[0] if usable_rows else (rows[0] if rows else {})
     return round_numbers(
         {
@@ -348,7 +374,7 @@ def table_row(metrics: dict[str, Any], setting: str | None = None, data_name: st
     spans = metrics["span_level"]["by_class"]
 
     def response_score(label: str) -> float | None:
-        return response.get(label, {}).get("detection_rate")
+        return response.get(label, {}).get("f1")
 
     def span_score(label: str) -> float | None:
         return spans.get(label, {}).get("span_f1")
@@ -407,6 +433,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--setting", default=None, help="Override the Setting table field.")
     parser.add_argument("--data", dest="data_name", default=None, help="Override the Data table field.")
     parser.add_argument("--model", dest="model_name", default=None, help="Override the Model table field.")
+    parser.add_argument(
+        "--iou-threshold",
+        type=float,
+        default=DEFAULT_IOU_THRESHOLD,
+        help="IoU threshold for span matching (default: 0.75).",
+    )
     return parser.parse_args()
 
 
@@ -417,7 +449,9 @@ def main() -> None:
     rows = load_jsonl(args.predictions)
     if not rows:
         raise ValueError(f"Prediction file is empty: {args.predictions}")
-    metrics = build_metrics(rows)
+    if not 0.0 <= args.iou_threshold <= 1.0:
+        raise ValueError("--iou-threshold must be between 0 and 1")
+    metrics = build_metrics(rows, iou_threshold=args.iou_threshold)
     if args.model_name:
         metrics["model"] = args.model_name
     row = table_row(metrics, setting=args.setting, data_name=args.data_name)

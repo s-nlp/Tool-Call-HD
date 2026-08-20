@@ -31,7 +31,6 @@ python evaluate/baselines/compute_metrics.py \
 
 The CSV contains one row with `Setting`, `Data`, `Model`, five response-level
 class columns plus their average, and three span-level class columns plus
-their average. LettuceDetect returns generic hallucination spans rather than
-the hallucination type, so response-level class values are per-gold-class
-detection rates: specificity for `Correct` and recall for the four error
-classes. Span-level values are overlap-based span F1.
+their average. Response-level columns are one-vs-rest F1 values. Span-level
+values are one-to-one span F1 with IoU matching (`IoU >= 0.75` by default);
+use `--iou-threshold` to change it.
