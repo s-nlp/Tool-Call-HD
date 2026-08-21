@@ -1,0 +1,8 @@
+torch
+transformers
+datasets
+safetensors
+huggingface_hub
+vllm
+flash-linear-attention
+causal-conv1d
