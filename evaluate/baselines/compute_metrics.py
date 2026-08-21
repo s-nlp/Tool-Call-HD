@@ -418,7 +418,16 @@ def write_csv(path: Path, row: dict[str, Any]) -> None:
     with path.open("w", encoding="utf-8", newline="") as output_file:
         writer = csv.DictWriter(output_file, fieldnames=list(row))
         writer.writeheader()
-        writer.writerow({key: "" if value is None else value for key, value in row.items()})
+        writer.writerow({key: format_table_value(value) for key, value in row.items()})
+
+
+def format_table_value(value: Any) -> str:
+    """Render table scores with exactly two digits after the decimal point."""
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        return f"{value:.2f}"
+    return str(value)
 
 
 def print_summary(metrics: dict[str, Any], row: dict[str, Any]) -> None:
@@ -426,13 +435,13 @@ def print_summary(metrics: dict[str, Any], row: dict[str, Any]) -> None:
     print(f"Rows: {metrics['scored_rows']} scored / {metrics['total_rows']} total")
     print(
         "Response-level: "
-        f"P={response['precision']:.4f} R={response['recall']:.4f} "
-        f"F1={response['f1']:.4f} Acc={response['accuracy']:.4f}"
+        f"P={response['precision']:.2f} R={response['recall']:.2f} "
+        f"F1={response['f1']:.2f} Acc={response['accuracy']:.2f}"
     )
-    print(f"Response-level macro class score: {row['Response-level Avg.']}")
-    print(f"Span-level macro F1: {row['Span-level Avg.']}")
+    print(f"Response-level macro class score: {format_table_value(row['Response-level Avg.'])}")
+    print(f"Span-level pooled F1: {format_table_value(row['Span-level Avg.'])}")
     print("Table row:")
-    print(json.dumps(row, ensure_ascii=False))
+    print(json.dumps({key: format_table_value(value) for key, value in row.items()}, ensure_ascii=False))
 
 
 def parse_args() -> argparse.Namespace:

@@ -35,6 +35,9 @@ their average. Response-level columns are one-vs-rest F1 values. Span-level
 class values are one-to-one span F1 with IoU matching (`IoU > 0.75` by
 default); clean-row and undergeneration false-positive spans are included in
 the pooled span-level `Avg.`. Use `--iou-threshold` to change the threshold.
+Scores in the console summary and CSV table are rendered with two decimal
+places (`XX.XX`). The full JSON metrics retain numeric values for downstream
+processing.
 
 ## How to interpret the metrics
 
