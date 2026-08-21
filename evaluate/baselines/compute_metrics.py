@@ -10,11 +10,13 @@ scored one-vs-rest: ``clean`` means no predicted span and every hallucination
 class means at least one predicted span.  The reported class value is the
 resulting F1, so false positives are included.
 
-Span-level metrics are computed only for the three classes with gold spans:
+Per-class span metrics are reported for the three classes with gold spans:
 ``answer_mismatch``, ``overgeneration`` and ``missing_tool``.  Primary
 ``span_f1`` is one-to-one span matching performed independently inside each
-answer, with IoU >= 0.75 by default.  The summary additionally contains
-character-overlap F1, token F1, and exact-match rate.
+answer, with IoU > 0.75 by default.  The summary additionally contains
+character-overlap F1, token F1, and exact-match rate.  The pooled ``ALL``
+span-F1 includes every row: spans predicted on clean and undergeneration rows
+are false positives.  The CSV span-level average uses this pooled value.
 
 Examples
 --------
@@ -225,32 +227,41 @@ def overlap_span_prf(
     done per row, since offsets are relative to each answer and cannot be
     compared across examples.
     """
+    pairs = sorted(
+        (
+            _span_iou(predicted, target),
+            pred_index,
+            gold_index,
+        )
+        for pred_index, predicted in enumerate(pred)
+        for gold_index, target in enumerate(gold)
+    )[::-1]
+    used_pred: set[int] = set()
     matched_gold: set[int] = set()
     tp = fp = 0
-    for predicted in pred:
-        hit = None
-        for gold_index, target in enumerate(gold):
-            if gold_index in matched_gold:
-                continue
-            overlap = max(
-                0,
-                min(predicted["end"], target["end"])
-                - max(predicted["start"], target["start"]),
-            )
-            union = (predicted["end"] - predicted["start"]) + (
-                target["end"] - target["start"]
-            ) - overlap
-            iou = overlap / union if union else 0.0
-            if iou >= iou_threshold:
-                hit = gold_index
-                break
-        if hit is None:
-            fp += 1
-        else:
-            matched_gold.add(hit)
-            tp += 1
+    for iou, pred_index, gold_index in pairs:
+        if iou <= iou_threshold:
+            break
+        if pred_index in used_pred or gold_index in matched_gold:
+            continue
+        used_pred.add(pred_index)
+        matched_gold.add(gold_index)
+        tp += 1
+    fp = len(pred) - tp
     fn = len(gold) - len(matched_gold)
     return prf(tp, fp, fn)
+
+
+def _span_iou(predicted: dict[str, Any], target: dict[str, Any]) -> float:
+    overlap = max(
+        0,
+        min(predicted["end"], target["end"])
+        - max(predicted["start"], target["start"]),
+    )
+    union = (predicted["end"] - predicted["start"]) + (
+        target["end"] - target["start"]
+    ) - overlap
+    return overlap / union if union else 0.0
 
 
 def char_f1(gold: list[dict[str, Any]], pred: list[dict[str, Any]], answer: str) -> float:
@@ -286,62 +297,63 @@ def exact_match(gold: list[dict[str, Any]], pred: list[dict[str, Any]]) -> bool:
 def span_metrics(rows: list[dict[str, Any]], iou_threshold: float) -> dict[str, Any]:
     by_class: dict[str, Any] = {}
     class_f1s: list[float] = []
-    pooled_counts = Counter()
+    scopes = [*SPAN_TYPES, "undergeneration", "clean(FP source)"]
+    scope_rows: dict[str, list[dict[str, Any]]] = {scope: [] for scope in scopes}
+    scope_rows["ALL"] = rows
+    for row in rows:
+        gold_type = row_type(row)
+        if gold_type in scopes:
+            scope_rows[gold_type].append(row)
+        elif gold_type == "clean":
+            scope_rows["clean(FP source)"].append(row)
 
-    for label in SPAN_TYPES:
-        class_rows = [row for row in rows if row_type(row) == label]
-        gold_all: list[dict[str, Any]] = []
-        pred_all: list[dict[str, Any]] = []
+    def compute_scope(scope: str, scope_data: list[dict[str, Any]]) -> dict[str, Any]:
+        counts = Counter()
+        gold_span_count = pred_span_count = 0
         char_scores: list[float] = []
         token_scores: list[float] = []
         exact_scores: list[int] = []
-        class_counts = Counter()
-        for row in class_rows:
+        for row in scope_data:
             gold = row_spans(row, "gold_spans")
             pred = row_spans(row, "pred_spans") if row.get("status", "ok") == "ok" else []
             answer = answer_of(row)
             row_span_metrics = overlap_span_prf(gold, pred, iou_threshold)
             for key in ("tp", "fp", "fn"):
-                class_counts[key] += row_span_metrics[key]
-                pooled_counts[key] += row_span_metrics[key]
-            gold_all.extend(gold)
-            pred_all.extend(pred)
-            char_scores.append(char_f1(gold, pred, answer))
-            token_scores.append(token_f1(gold, pred, answer))
-            exact_scores.append(int(exact_match(gold, pred)))
-        if class_rows:
-            span_report = prf(class_counts["tp"], class_counts["fp"], class_counts["fn"])
-            span_report["span_f1"] = span_report["f1"]
-            span_report["iou_threshold"] = iou_threshold
-            span_report["char_overlap_f1"] = sum(char_scores) / len(char_scores)
-            span_report["token_f1"] = sum(token_scores) / len(token_scores)
-            span_report["exact_match_rate"] = sum(exact_scores) / len(exact_scores)
-        else:
-            span_report = {
-                "precision": None,
-                "recall": None,
-                "f1": None,
-                "tp": 0,
-                "fp": 0,
-                "fn": 0,
-                "span_f1": None,
-                "char_overlap_f1": None,
-                "token_f1": None,
-                "exact_match_rate": None,
-                "iou_threshold": iou_threshold,
-            }
-        span_report["support_rows"] = len(class_rows)
-        span_report["gold_spans"] = len(gold_all)
-        span_report["pred_spans"] = len(pred_all)
-        by_class[label] = span_report
-        if span_report["span_f1"] is not None:
-            class_f1s.append(float(span_report["span_f1"]))
+                counts[key] += row_span_metrics[key]
+            gold_span_count += len(gold)
+            pred_span_count += len(pred)
+            if scope in SPAN_TYPES:
+                char_scores.append(char_f1(gold, pred, answer))
+                token_scores.append(token_f1(gold, pred, answer))
+                exact_scores.append(int(exact_match(gold, pred)))
 
-    pooled = prf(pooled_counts["tp"], pooled_counts["fp"], pooled_counts["fn"])
+        report = prf(counts["tp"], counts["fp"], counts["fn"])
+        report["span_f1"] = report["f1"]
+        report["iou_threshold"] = iou_threshold
+        report["support_rows"] = len(scope_data)
+        report["gold_spans"] = gold_span_count
+        report["pred_spans"] = pred_span_count
+        report["char_overlap_f1"] = (
+            sum(char_scores) / len(char_scores) if char_scores else None
+        )
+        report["token_f1"] = sum(token_scores) / len(token_scores) if token_scores else None
+        report["exact_match_rate"] = (
+            sum(exact_scores) / len(exact_scores) if exact_scores else None
+        )
+        return report
+
+    overall = compute_scope("ALL", scope_rows["ALL"])
+    for scope in scopes:
+        report = compute_scope(scope, scope_rows[scope])
+        by_class[scope] = report
+        if scope in SPAN_TYPES and scope_rows[scope]:
+            class_f1s.append(float(report["span_f1"]))
+
     return {
         "by_class": by_class,
         "macro_span_f1": sum(class_f1s) / len(class_f1s) if class_f1s else None,
-        "pooled": {**pooled, "span_f1": pooled["f1"], "iou_threshold": iou_threshold},
+        "overall": overall,
+        "pooled": overall,
     }
 
 
@@ -392,7 +404,7 @@ def table_row(metrics: dict[str, Any], setting: str | None = None, data_name: st
         "Span-level Mismatch": span_score("answer_mismatch"),
         "Span-level Overgen.": span_score("overgeneration"),
         "Span-level Missing Tool": span_score("missing_tool"),
-        "Span-level Avg.": metrics["span_level"].get("macro_span_f1"),
+        "Span-level Avg.": metrics["span_level"].get("overall", {}).get("span_f1"),
     }
 
 

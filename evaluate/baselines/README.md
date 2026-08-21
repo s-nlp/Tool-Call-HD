@@ -32,5 +32,6 @@ python evaluate/baselines/compute_metrics.py \
 The CSV contains one row with `Setting`, `Data`, `Model`, five response-level
 class columns plus their average, and three span-level class columns plus
 their average. Response-level columns are one-vs-rest F1 values. Span-level
-values are one-to-one span F1 with IoU matching (`IoU >= 0.75` by default);
-use `--iou-threshold` to change it.
+class values are one-to-one span F1 with IoU matching (`IoU > 0.75` by
+default); clean-row and undergeneration false-positive spans are included in
+the pooled span-level `Avg.`. Use `--iou-threshold` to change the threshold.
