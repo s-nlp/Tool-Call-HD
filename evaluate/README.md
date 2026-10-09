@@ -28,6 +28,14 @@ python3 evaluate/evaluate_lettuce_metrics.py \
   --summary-output dataset_v3_metrics.json
 ```
 
+## Comparable tables across detectors
+
+`baselines/` holds the unified scorers used for the result tables: `compute_metrics.py` for
+span-only detectors, `compute_metrics_decoder.py` for class-aware ones, both with the same
+columns (per-class response F1, Avg. without undergeneration, span F1 at IoU > 0.75). See
+[`baselines/README.md`](baselines/README.md). Outputs of `zero_shot.py` / `few_shot.py` written
+before the span-anchoring fix should be re-parsed with `baselines/reparse_llm_predictions.py`.
+
 ## Evaluation using VLLM\OpenRouter
 
 Training-free few-shot baseline: prompt a big model (via OpenRouter, OpenAI lib)

@@ -178,6 +178,50 @@ def extract_json(text: str) -> dict[str, Any]:
     raise json.JSONDecodeError("no parseable JSON object found", text, 0)
 
 
+def _nearest_occurrence(answer: str, text: str, anchor: int) -> int:
+    """Start of the occurrence of ``text`` in ``answer`` closest to ``anchor`` (-1 if absent)."""
+    best, pos = -1, answer.find(text)
+    while pos >= 0:
+        if best < 0 or abs(pos - anchor) < abs(best - anchor):
+            best = pos
+        pos = answer.find(text, pos + 1)
+    return best
+
+
+def _anchor_span(sp: dict[str, Any], final_answer: str, i: int, issues: list[str]) -> bool:
+    """Place one predicted span in the answer; return False to drop it.
+
+    The quoted text is the anchor — LLM character offsets are almost always off,
+    and overwriting the quote with whatever sits at those offsets (as this step
+    used to do) misplaces nearly every span. Offsets are used only when the quote
+    is not in the answer. A quote that cannot be placed at all is kept without
+    offsets, so scorers count it as a false positive instead of losing it.
+    """
+    s, e, t = sp.get("start"), sp.get("end"), sp.get("text", "")
+    has_offsets = isinstance(s, int) and isinstance(e, int)
+    in_range = has_offsets and 0 <= s < e <= len(final_answer)
+    if isinstance(t, str) and t:
+        if in_range and final_answer[s:e] == t:
+            return True
+        idx = _nearest_occurrence(final_answer, t, s if has_offsets else 0)
+        if idx >= 0:
+            issues.append(f"span[{i}] offsets corrected via text search (was [{s},{e}])")
+            sp["start"], sp["end"] = idx, idx + len(t)
+        elif in_range:
+            issues.append(f"span[{i}] text not found in answer, using offsets [{s},{e}]")
+            sp["model_text"], sp["text"] = t, final_answer[s:e]
+        else:
+            issues.append(f"span[{i}] text not found and offsets unusable [{s},{e}]; kept without offsets")
+            sp.pop("start", None)
+            sp.pop("end", None)
+        return True
+    if in_range:
+        sp["text"] = final_answer[s:e]
+        return True
+    issues.append(f"span[{i}] has no text and no usable offsets [{s},{e}]; dropped")
+    return False
+
+
 def validate_prediction(pred: dict[str, Any], final_answer: str) -> dict[str, Any]:
     issues = []
     ptype = pred.get("type", "")
@@ -201,27 +245,8 @@ def validate_prediction(pred: dict[str, Any], final_answer: str) -> dict[str, An
         if not isinstance(sp, dict):
             issues.append(f"span[{i}] is not a dict")
             continue
-        s, e = sp.get("start"), sp.get("end")
-        t = sp.get("text", "")
-        if not isinstance(s, int) or not isinstance(e, int):
-            issues.append(f"span[{i}] non-int start/end")
-            if isinstance(t, str) and t and t in final_answer:
-                idx = final_answer.index(t)
-                sp["start"] = idx
-                sp["end"] = idx + len(t)
-                issues.append(f"span[{i}] auto-corrected offsets via text search")
-            else:
-                continue
-        else:
-            actual = final_answer[s:e]
-            if actual != t and t:
-                sp["text"] = actual
-                if actual:
-                    issues.append(f"span[{i}] text mismatch fixed")
-                else:
-                    issues.append(f"span[{i}] out-of-range offsets [{s},{e}]")
-                    continue
-        validated_spans.append(sp)
+        if _anchor_span(sp, final_answer, i, issues):
+            validated_spans.append(sp)
 
     pred["span_labels"] = validated_spans
     pred["parse_issues"] = issues

@@ -11,6 +11,7 @@ generation_pipeline/
   hallucination_editing_pipeline/    span-tagged editing of gold answers (types 1.2 / 2.1 / 3.1)
   hallucination_generation_pipeline/ LLM generation + unify + judge + filter + export
 evaluate/                            zero/few-shot LLM baselines + metric scorers
+  baselines/                         unified scorers: span-only + class-aware detectors in one table
   verbalized/                        verbalized-baseline scorer (check_eval.py)
 lettucedetect/
   train/                             ModernBERT (LettuceDetect) trainer
@@ -156,6 +157,10 @@ python evaluate/evaluate_save.py \
   --save-preds evaluate/results/toolhace_modernbert_base_test_predictions.jsonl \
   --by-type
 ```
+
+To compare encoders, fine-tuned decoders and prompted LLMs in one table (per-class response F1,
+span F1 at IoU > 0.75, chance level), score their prediction files with the unified scorers in
+[`evaluate/baselines/`](evaluate/baselines/README.md).
 
 ## Lookback-Lens guide
 
