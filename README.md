@@ -244,3 +244,17 @@ python lookbacklens/form_preds_LBL.py \
 
 A standalone snippet (no LettuceDetect) and full results / soup ingredients / evaluation protocol are on the [HF model card](https://huggingface.co/s-nlp/tool-calling-hallucination-modernbert-large-crf-best).
 
+
+## Citation
+
+```bibtex
+@misc{ivanov2026toolhace,
+  title={ToolHACE: A Dataset for Detecting Hallucinations in Tool-Based LLM Responses},
+  author={Nikolay Ivanov and Sergey Pletenev and Elisei Rykov and Anatolii Frolov and Bogdan Monogov and Alexander Potekhin and Maria Marina and Daniil Moskovskiy and Viktor Moskvoretskii and Alexander Panchenko and Ilseyar Alimova},
+  year={2026},
+  eprint={2610.17125},
+  archivePrefix={arXiv},
+  primaryClass={cs.CL},
+  url={https://arxiv.org/abs/2610.17125}
+}
+```
